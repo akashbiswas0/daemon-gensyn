@@ -24,7 +24,8 @@ const CAPABILITY_OPTIONS = [
 const DEFAULT_BOOTSTRAP_PEER =
   process.env.NEXT_PUBLIC_OPERATOR_BOOTSTRAP_PEER ?? "";
 const DEFAULT_REPO_URL =
-  process.env.NEXT_PUBLIC_OPERATOR_REPO_URL ?? "<your-nodehub-repo-url>";
+  process.env.NEXT_PUBLIC_OPERATOR_REPO_URL ??
+  "https://github.com/akashbiswas0/daemon-gensyn.git";
 const REGION_OPTIONS = [
   { value: "", label: "Select region" },
   { value: "london", label: "London" },
