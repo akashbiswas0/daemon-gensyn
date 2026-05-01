@@ -36,6 +36,10 @@ Usage:
 EOF
 }
 
+log_step() {
+  printf "\n[%s] %s\n" "OnboardWorker" "$1"
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "Missing required command: $1" >&2
@@ -49,12 +53,13 @@ refresh_homebrew_path() {
 
 ensure_go() {
   if command -v go >/dev/null 2>&1; then
+    log_step "Go already installed."
     return
   fi
 
   refresh_homebrew_path
   if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
-    echo "Go not found. Installing Go with Homebrew..."
+    log_step "Go not found. Installing Go with Homebrew..."
     brew install go
     refresh_homebrew_path
   else
@@ -284,6 +289,7 @@ if [[ "$OPENAI_ENABLED" != "true" ]]; then
 fi
 
 if [[ -f "$PID_FILE" ]]; then
+  log_step "Stopping any previous local operator worker processes."
   "$ROOT/platform/operator/stop_worker.sh" >/dev/null 2>&1 || true
 fi
 
@@ -292,20 +298,26 @@ for port in 9005 9006 8110 9101; do
 done
 
 if [[ ! -x "$ROOT/node" ]]; then
-  (cd "$ROOT" && make build >/dev/null)
+  log_step "Building the AXL node binary."
+  (cd "$ROOT" && make build)
+else
+  log_step "Reusing existing AXL node binary."
 fi
 
 if [[ ! -d "$VENV_DIR" ]]; then
+  log_step "Creating Python virtual environment."
   python3 -m venv "$VENV_DIR"
 fi
 
+log_step "Installing Python dependencies for the worker runtime."
 source "$VENV_DIR/bin/activate"
-python -m pip install -e "$ROOT/platform[test]" -e "$ROOT/integrations[test]" >/dev/null
+python -m pip install -e "$ROOT/platform[test]" -e "$ROOT/integrations[test]"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$STATE_DIR"
 : >"$PID_FILE"
 [[ -f "$NODE_KEY_PATH" ]] || openssl genpkey -algorithm ed25519 -out "$NODE_KEY_PATH" >/dev/null 2>&1
 ensure_evm_key "$SIGNING_KEY_PATH"
+log_step "Writing local worker runtime config."
 write_node_config
 
 : >"$WORKER_ENV_FILE"
@@ -327,11 +339,15 @@ write_env_line "NODEHUB_AGENTIC_ENABLED" "true"
 write_env_line "NODEHUB_OPENAI_API_KEY" "$OPENAI_KEY"
 
 start_process "${LOG_PREFIX}-node" "cd '$ROOT' && ./node -config '$NODE_CONFIG_PATH'"
+log_step "Starting local AXL node."
 wait_for_http "http://127.0.0.1:9005/topology"
 start_process "${LOG_PREFIX}-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9006"
+log_step "Starting MCP router."
 wait_for_http "http://127.0.0.1:9006/health"
 start_process "${LOG_PREFIX}-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && set -a && source '$WORKER_ENV_FILE' && set +a && PYTHONPATH=platform uvicorn daemon.app:app --host 127.0.0.1 --port 8110"
+log_step "Starting worker daemon."
 
+log_step "Waiting for worker daemon health."
 if ! wait_for_http "http://127.0.0.1:8110/health"; then
   print_log_tail "Node log" "$LOG_DIR/${LOG_PREFIX}-node.log"
   print_log_tail "Router log" "$LOG_DIR/${LOG_PREFIX}-router.log"
@@ -339,6 +355,7 @@ if ! wait_for_http "http://127.0.0.1:8110/health"; then
   exit 1
 fi
 
+log_step "Waiting for A2A agent card."
 if ! wait_for_http "http://127.0.0.1:8110/.well-known/agent-card.json"; then
   print_log_tail "Daemon log" "$LOG_DIR/${LOG_PREFIX}-daemon.log"
   exit 1
