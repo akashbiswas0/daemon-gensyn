@@ -143,12 +143,16 @@ export function OperatorOnboardingClient() {
   return (
     <div className="operator-layout">
       <section className="surface-card operator-hero">
-        <div className="operator-copy">
+          <div className="operator-copy">
           <div className="kicker">Operator Onboarding</div>
           <h1>Bring a local worker live with one command.</h1>
           <p className="muted">
             NodeHub workers run on your machine. Connect a payout wallet here, choose a declared region,
             and generate the exact repo bootstrap command to run after cloning.
+          </p>
+          <p className="muted">
+            Prerequisites on the operator laptop: Python 3, `make`, and a browser wallet. On macOS,
+            the bootstrap script can install Go automatically if Homebrew is already installed.
           </p>
           <div className="row">
             <button type="button" className="button" onClick={connectWallet}>

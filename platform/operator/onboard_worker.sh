@@ -43,6 +43,32 @@ require_cmd() {
   }
 }
 
+refresh_homebrew_path() {
+  PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+}
+
+ensure_go() {
+  if command -v go >/dev/null 2>&1; then
+    return
+  fi
+
+  refresh_homebrew_path
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+    echo "Go not found. Installing Go with Homebrew..."
+    brew install go
+    refresh_homebrew_path
+  else
+    echo "Missing required command: go" >&2
+    echo "Install Go first, or install Homebrew so this script can install it automatically on macOS." >&2
+    exit 1
+  fi
+
+  command -v go >/dev/null 2>&1 || {
+    echo "Go installation finished, but 'go' is still not available on PATH." >&2
+    exit 1
+  }
+}
+
 start_process() {
   local name="$1"
   shift
@@ -106,13 +132,13 @@ write_node_config() {
   "a2a_addr": "http://127.0.0.1",
   "a2a_port": 8110
 }
+EOF
+}
 
 write_env_line() {
   local key="$1"
   local value="$2"
   printf "%s=%q\n" "$key" "$value" >>"$WORKER_ENV_FILE"
-}
-EOF
 }
 
 normalize_bool() {
@@ -223,6 +249,13 @@ if [[ ${#CANONICAL_CAPABILITIES[@]} -eq 0 ]]; then
   exit 1
 fi
 
+require_cmd curl
+require_cmd lsof
+require_cmd openssl
+require_cmd python3
+require_cmd make
+ensure_go
+
 if [[ "$OPENAI_ENABLED" == "true" && -z "$OPENAI_KEY" && -f "$WORKER_ENV_FILE" ]]; then
   # Reuse a previously stored key if the operator already onboarded this worker.
   # shellcheck disable=SC1090
@@ -238,12 +271,6 @@ fi
 if [[ "$OPENAI_ENABLED" != "true" ]]; then
   OPENAI_KEY=""
 fi
-
-require_cmd curl
-require_cmd lsof
-require_cmd openssl
-require_cmd python3
-require_cmd make
 
 if [[ -f "$PID_FILE" ]]; then
   "$ROOT/platform/operator/stop_worker.sh" >/dev/null 2>&1 || true
