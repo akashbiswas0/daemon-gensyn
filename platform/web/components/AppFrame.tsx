@@ -1,0 +1,97 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { ReactNode } from "react";
+
+import { IdentityBadge } from "./IdentityBadge";
+
+const NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/jobs", label: "Jobs" },
+  { href: "/leases", label: "Leases" },
+  { href: "/activities", label: "Activities" },
+  { href: "/nodes", label: "Nodes" },
+  { href: "/ledger", label: "Ledger" },
+];
+
+const PAGE_TITLES: Array<[RegExp, { title: string; subtitle: string }]> = [
+  [/^\/dashboard$/, { title: "Operator Overview", subtitle: "Discovery, leasing, and execution." }],
+  [/^\/jobs$/, { title: "Jobs", subtitle: "Run signed WebOps tasks." }],
+  [/^\/jobs\/[^/]+$/, { title: "Job Report", subtitle: "Signed receipts and outcomes." }],
+  [/^\/leases$/, { title: "Leases", subtitle: "Reserve worker capacity." }],
+  [/^\/activities$/, { title: "Activities", subtitle: "Recent jobs and leases." }],
+  [/^\/nodes$/, { title: "Discovered Nodes", subtitle: "Known worker peers." }],
+  [/^\/ledger$/, { title: "Trust Ledger", subtitle: "Signed attestations only." }],
+  [/^\/earnings$/, { title: "Trust Ledger", subtitle: "Signed attestations only." }],
+];
+
+function pageMeta(pathname: string) {
+  for (const [pattern, meta] of PAGE_TITLES) {
+    if (pattern.test(pathname)) {
+      return meta;
+    }
+  }
+  return { title: "NodeHub Console", subtitle: "Local AXL control surface." };
+}
+
+export function AppFrame({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  const isMarketing = pathname === "/" || pathname === "/operators";
+  const meta = pageMeta(pathname);
+
+  if (isMarketing) {
+    return (
+      <div className="marketing-shell">
+        <header className="marketing-topbar">
+          <Link href="/" className="brand-lockup">
+            <span className="brand-mark">NodeHub</span>
+            <span className="brand-submark">AXL-native execution</span>
+          </Link>
+          <nav className="marketing-nav">
+            <Link href="/#capabilities">Capabilities</Link>
+            <Link href="/#how">Workflow</Link>
+            <Link href="/operators">Operators</Link>
+            <Link href="/dashboard" className="button button-ghost">Open Console</Link>
+          </nav>
+        </header>
+        <main className="marketing-main">{children}</main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="console-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <h1>Operator Console</h1>
+          <p>Local AXL runtime</p>
+        </div>
+        <nav className="sidebar-nav">
+          {NAV_ITEMS.map((item) => {
+            const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(`${item.href}/`));
+            return (
+              <Link key={item.href} href={item.href} className={`sidebar-link${active ? " active" : ""}`}>
+                <span className="sidebar-icon" />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
+      <div className="console-main">
+        <header className="console-topbar">
+          <div>
+            <h2>{meta.title}</h2>
+            <p>{meta.subtitle}</p>
+          </div>
+          <div className="console-actions">
+            
+            <IdentityBadge />
+          </div>
+        </header>
+        <main className="console-content">{children}</main>
+      </div>
+    </div>
+  );
+}
