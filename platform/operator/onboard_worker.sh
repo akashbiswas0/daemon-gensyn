@@ -95,6 +95,17 @@ wait_for_http() {
   return 1
 }
 
+print_log_tail() {
+  local label="$1"
+  local file="$2"
+  local lines="${3:-80}"
+  if [[ -f "$file" ]]; then
+    echo ""
+    echo "----- $label ($file) -----" >&2
+    tail -n "$lines" "$file" >&2 || true
+  fi
+}
+
 port_in_use() {
   local port="$1"
   lsof -ti tcp:"$port" >/dev/null 2>&1
@@ -318,10 +329,20 @@ write_env_line "NODEHUB_OPENAI_API_KEY" "$OPENAI_KEY"
 start_process "${LOG_PREFIX}-node" "cd '$ROOT' && ./node -config '$NODE_CONFIG_PATH'"
 wait_for_http "http://127.0.0.1:9005/topology"
 start_process "${LOG_PREFIX}-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9006"
+wait_for_http "http://127.0.0.1:9006/health"
 start_process "${LOG_PREFIX}-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && set -a && source '$WORKER_ENV_FILE' && set +a && PYTHONPATH=platform uvicorn daemon.app:app --host 127.0.0.1 --port 8110"
 
-wait_for_http "http://127.0.0.1:8110/health"
-wait_for_http "http://127.0.0.1:8110/.well-known/agent-card.json"
+if ! wait_for_http "http://127.0.0.1:8110/health"; then
+  print_log_tail "Node log" "$LOG_DIR/${LOG_PREFIX}-node.log"
+  print_log_tail "Router log" "$LOG_DIR/${LOG_PREFIX}-router.log"
+  print_log_tail "Daemon log" "$LOG_DIR/${LOG_PREFIX}-daemon.log"
+  exit 1
+fi
+
+if ! wait_for_http "http://127.0.0.1:8110/.well-known/agent-card.json"; then
+  print_log_tail "Daemon log" "$LOG_DIR/${LOG_PREFIX}-daemon.log"
+  exit 1
+fi
 
 IDENTITY_JSON="$(curl -fsS http://127.0.0.1:8110/identity)"
 TOPOLOGY_JSON="$(curl -fsS http://127.0.0.1:9005/topology)"
