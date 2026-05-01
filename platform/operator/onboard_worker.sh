@@ -311,7 +311,7 @@ fi
 
 log_step "Installing Python dependencies for the worker runtime."
 source "$VENV_DIR/bin/activate"
-python -m pip install -e "$ROOT/platform[test]" -e "$ROOT/integrations[test]"
+python -m pip install --disable-pip-version-check -e "$ROOT/platform" -e "$ROOT/integrations"
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$STATE_DIR"
 : >"$PID_FILE"
