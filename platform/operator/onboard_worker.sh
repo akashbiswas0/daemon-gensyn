@@ -116,7 +116,9 @@ EOF
 }
 
 normalize_bool() {
-  case "${1,,}" in
+  local lowered
+  lowered="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
     true|1|yes|y) echo "true" ;;
     false|0|no|n|"") echo "false" ;;
     *)
@@ -173,8 +175,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 LABEL="${LABEL:-Operator Worker}"
-REGION="${REGION,,}"
-COUNTRY="${COUNTRY^^}"
+REGION="$(printf '%s' "$REGION" | tr '[:upper:]' '[:lower:]')"
+COUNTRY="$(printf '%s' "$COUNTRY" | tr '[:lower:]' '[:upper:]')"
 
 if [[ -z "$REGION" || -z "$COUNTRY" || -z "$PAYOUT_WALLET" || -z "$CAPABILITIES" || -z "$SEED_PEER" ]]; then
   usage
@@ -279,7 +281,9 @@ write_env_line "NODEHUB_WORKER_PUBLIC_LABEL" "$LABEL"
 write_env_line "NODEHUB_WORKER_REGION" "$REGION"
 write_env_line "NODEHUB_WORKER_COUNTRY_CODE" "$COUNTRY"
 write_env_line "NODEHUB_WALLET_PRIVATE_KEY_PATH" "$SIGNING_KEY_PATH"
-write_env_line "NODEHUB_WORKER_PAYOUT_WALLET" "${PAYOUT_WALLET,,}"
+LOWER_PAYOUT_WALLET="$(printf '%s' "$PAYOUT_WALLET" | tr '[:upper:]' '[:lower:]')"
+
+write_env_line "NODEHUB_WORKER_PAYOUT_WALLET" "$LOWER_PAYOUT_WALLET"
 write_env_line "NODEHUB_WORKER_ENABLED_CAPABILITIES" "$(IFS=,; echo "${CANONICAL_CAPABILITIES[*]}")"
 write_env_line "NODEHUB_AGENTIC_ENABLED" "true"
 write_env_line "NODEHUB_OPENAI_API_KEY" "$OPENAI_KEY"
@@ -303,7 +307,7 @@ PY
 echo ""
 echo "NodeHub worker is live."
 echo "Peer ID: $PEER_ID"
-echo "Payout wallet: ${PAYOUT_WALLET,,}"
+echo "Payout wallet: $LOWER_PAYOUT_WALLET"
 echo "Daemon: http://127.0.0.1:8110"
 echo "AXL API: http://127.0.0.1:9005"
 echo "Logs: $LOG_DIR"
@@ -311,7 +315,7 @@ echo ""
 echo "What success looks like:"
 echo "- Your worker appears in the requester dashboard /nodes page after discovery."
 echo "- Jobs routed to this peer return signed receipts under peer ID $PEER_ID."
-echo "- Future requester-side KeeperHub payouts target ${PAYOUT_WALLET,,}."
+echo "- Future requester-side KeeperHub payouts target $LOWER_PAYOUT_WALLET."
 echo ""
 echo "To stop this worker later:"
 echo "  $ROOT/platform/operator/stop_worker.sh"

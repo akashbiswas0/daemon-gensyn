@@ -15,7 +15,10 @@ cleanup_port() {
 }
 
 if [[ -f "$PID_FILE" ]]; then
-  mapfile -t entries <"$PID_FILE"
+  entries=()
+  while IFS= read -r line; do
+    entries+=("$line")
+  done <"$PID_FILE"
   for (( idx=${#entries[@]}-1 ; idx>=0 ; idx-- )) ; do
     IFS=: read -r _ pid <<<"${entries[$idx]}"
     if kill -0 "$pid" >/dev/null 2>&1; then
