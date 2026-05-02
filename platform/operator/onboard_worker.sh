@@ -189,6 +189,62 @@ listening_process_info() {
   lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
 }
 
+primary_lan_ip() {
+  # Best-effort: pick the IPv4 address of the default-route interface. Falls
+  # back to the first non-loopback IPv4 the host advertises.
+  local iface ip
+  iface="$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')"
+  if [[ -n "$iface" ]]; then
+    ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+  fi
+  if [[ -z "${ip:-}" ]]; then
+    ip="$(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')"
+  fi
+  printf '%s' "${ip:-}"
+}
+
+probe_inbound_9101() {
+  # Quick sanity check that the host accepts TCP on the LAN-facing IP. If
+  # the App Firewall is dropping packets we want to flag it before the
+  # operator wonders why the other laptop can't reach them.
+  local lan_ip="$1"
+  if [[ -z "$lan_ip" ]]; then
+    return 0
+  fi
+  if ! command -v nc >/dev/null 2>&1; then
+    return 0
+  fi
+  if nc -G 2 -z "$lan_ip" 9101 >/dev/null 2>&1; then
+    echo "[Onboard] Self-probe: $lan_ip:9101 is reachable."
+    return 0
+  fi
+  echo "" >&2
+  echo "[Onboard] WARNING: $lan_ip:9101 is not reachable from this host." >&2
+  echo "  This usually means the macOS Application Firewall is blocking the node binary." >&2
+  echo "  Run:  sudo $ROOT/platform/operator/configure_firewall.sh" >&2
+  echo "  Then retest with:  nc -vz $lan_ip 9101" >&2
+  return 1
+}
+
+try_configure_firewall() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$ROOT/platform/operator/configure_firewall.sh" ]]; then
+    return 0
+  fi
+  # Only attempt if the operator already has cached sudo credentials; never
+  # prompt during onboarding. Fall back to printed instructions otherwise.
+  if sudo -n true >/dev/null 2>&1; then
+    log_step "Configuring macOS Application Firewall for the node binary."
+    sudo -n "$ROOT/platform/operator/configure_firewall.sh" || true
+  else
+    echo ""
+    echo "[Onboard] To allow inbound peer connections on port 9101, run once:"
+    echo "  sudo $ROOT/platform/operator/configure_firewall.sh"
+  fi
+}
+
 port_in_use() {
   local port="$1"
   [[ -n "$(listening_process_info "$port")" ]]
@@ -595,6 +651,11 @@ print(json.loads("""$TOPOLOGY_JSON""")["our_public_key"])
 PY
 )"
 
+try_configure_firewall
+
+LAN_IP="$(primary_lan_ip)"
+probe_inbound_9101 "$LAN_IP" || true
+
 echo ""
 echo "NodeHub worker is live."
 echo "Peer ID: $PEER_ID"
@@ -603,6 +664,9 @@ echo "Daemon: http://127.0.0.1:8110"
 echo "AXL API: http://127.0.0.1:9005"
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
   echo "Browser runtime: ${NEXUS_URL}"
+fi
+if [[ -n "$LAN_IP" ]]; then
+  echo "Peer URI to share: tls://$LAN_IP:9101"
 fi
 echo "Logs: $LOG_DIR"
 echo ""

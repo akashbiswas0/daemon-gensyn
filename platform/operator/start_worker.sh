@@ -76,6 +76,34 @@ port_in_use() {
   lsof -ti tcp:"$port" >/dev/null 2>&1
 }
 
+primary_lan_ip() {
+  local iface ip
+  iface="$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')"
+  if [[ -n "$iface" ]]; then
+    ip="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+  fi
+  if [[ -z "${ip:-}" ]]; then
+    ip="$(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')"
+  fi
+  printf '%s' "${ip:-}"
+}
+
+probe_inbound_9101() {
+  local lan_ip="$1"
+  if [[ -z "$lan_ip" ]] || ! command -v nc >/dev/null 2>&1; then
+    return 0
+  fi
+  if nc -G 2 -z "$lan_ip" 9101 >/dev/null 2>&1; then
+    echo "[Start] Self-probe: $lan_ip:9101 is reachable."
+    return 0
+  fi
+  echo "" >&2
+  echo "[Start] WARNING: $lan_ip:9101 is not reachable from this host." >&2
+  echo "  Other laptops will see 'Operation timed out' until you run:" >&2
+  echo "    sudo $ROOT/platform/operator/configure_firewall.sh" >&2
+  return 1
+}
+
 ensure_port_free() {
   local port="$1"
   if port_in_use "$port"; then
@@ -196,6 +224,9 @@ print(payload.get("payout_wallet_address") or payload.get("wallet_address") or "
 PY
 )"
 
+LAN_IP="$(primary_lan_ip)"
+probe_inbound_9101 "$LAN_IP" || true
+
 echo ""
 echo "NodeHub worker is live."
 echo "Label: $WORKER_LABEL"
@@ -204,6 +235,9 @@ echo "Peer ID: $PEER_ID"
 echo "Payout wallet: $PAYOUT_WALLET"
 echo "Daemon: http://127.0.0.1:8110"
 echo "AXL API: http://127.0.0.1:9005"
+if [[ -n "$LAN_IP" ]]; then
+  echo "Peer URI to share: tls://$LAN_IP:9101"
+fi
 if [[ "${NODEHUB_NODE_NEXUS_AGENT_ENABLED:-false}" == "true" ]]; then
   echo "Browser runtime: ${NODEHUB_NODE_NEXUS_AGENT_URL:-http://127.0.0.1:8080}"
 fi
