@@ -47,8 +47,10 @@ start_process() {
   local name="$1"
   shift
   local log_file="$LOG_DIR/$name.log"
+  # Truncate per-session so the streamer doesn't replay the previous run's
+  # tail when './Start' is invoked again.
+  : >"$log_file"
   {
-    echo ""
     echo "===== $(date -u +"%Y-%m-%dT%H:%M:%SZ") $name session start ====="
   } >>"$log_file"
   nohup bash -lc "$*" >>"$log_file" 2>&1 </dev/null &

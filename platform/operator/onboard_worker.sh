@@ -135,8 +135,8 @@ start_process() {
   local name="$1"
   shift
   local log_file="$LOG_DIR/$name.log"
+  : >"$log_file"
   {
-    echo ""
     echo "===== $(date -u +"%Y-%m-%dT%H:%M:%SZ") $name session start ====="
   } >>"$log_file"
   nohup bash -lc "$*" >>"$log_file" 2>&1 </dev/null &
