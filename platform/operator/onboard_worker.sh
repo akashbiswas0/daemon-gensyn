@@ -26,6 +26,7 @@ CAPABILITIES=""
 SEED_PEER=""
 OPENAI_ENABLED="false"
 OPENAI_KEY="${NODEHUB_OPENAI_API_KEY:-}"
+PYTHON_BIN=""
 
 usage() {
   cat <<'EOF'
@@ -77,6 +78,50 @@ ensure_go() {
     echo "Go installation finished, but 'go' is still not available on PATH." >&2
     exit 1
   }
+}
+
+python_version_at_least_312() {
+  local candidate="$1"
+  "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
+PY
+}
+
+ensure_python312() {
+  refresh_homebrew_path
+
+  local candidates=()
+  if command -v python3.12 >/dev/null 2>&1; then
+    candidates+=("$(command -v python3.12)")
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    candidates+=("$(command -v python3)")
+  fi
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if python_version_at_least_312 "$candidate"; then
+      PYTHON_BIN="$candidate"
+      log_step "Using Python at $PYTHON_BIN."
+      return
+    fi
+  done
+
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+    log_step "Python 3.12+ not found. Installing python@3.12 with Homebrew..."
+    brew install python@3.12
+    refresh_homebrew_path
+    if command -v python3.12 >/dev/null 2>&1 && python_version_at_least_312 "$(command -v python3.12)"; then
+      PYTHON_BIN="$(command -v python3.12)"
+      log_step "Using Python at $PYTHON_BIN."
+      return
+    fi
+  fi
+
+  echo "Python 3.12 or newer is required for this project." >&2
+  echo "Install python@3.12, then rerun onboarding." >&2
+  exit 1
 }
 
 start_process() {
@@ -134,7 +179,7 @@ ensure_evm_key() {
   if [[ -f "$path" ]]; then
     return
   fi
-  python - <<PY >"$path"
+  "$PYTHON_BIN" - <<PY >"$path"
 from eth_account import Account
 print(Account.create().key.hex())
 PY
@@ -168,7 +213,7 @@ setup_node_nexus_agent() {
 
   if [[ ! -d "$NEXUS_VENV_DIR" ]]; then
     log_step "Creating node-nexus-agent Python virtual environment."
-    python3 -m venv "$NEXUS_VENV_DIR"
+    "$PYTHON_BIN" -m venv "$NEXUS_VENV_DIR"
   fi
 
   local nexus_python
@@ -327,9 +372,9 @@ fi
 require_cmd curl
 require_cmd lsof
 require_cmd openssl
-require_cmd python3
 require_cmd make
 ensure_go
+ensure_python312
 
 if [[ "$OPENAI_ENABLED" == "true" && -z "$OPENAI_KEY" && -f "$WORKER_ENV_FILE" ]]; then
   # Reuse a previously stored key if the operator already onboarded this worker.
@@ -369,7 +414,7 @@ fi
 
 if [[ ! -d "$VENV_DIR" ]]; then
   log_step "Creating Python virtual environment."
-  python3 -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
 log_step "Installing Python dependencies for the worker runtime."
