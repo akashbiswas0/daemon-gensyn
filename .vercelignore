@@ -1,0 +1,24 @@
+# Vercel only deploys the Next.js app under platform/web.
+# These top-level paths are backend code that should never reach the build.
+api
+cmd
+internal
+integrations
+node-nexus-agent
+docs
+examples
+containerfiles
+.buildkite
+platform/daemon
+platform/operator
+platform/demo
+platform/shared
+platform/tests
+*.go
+go.mod
+go.sum
+node
+node-config.json
+platform.db
+platform-test.db
+.env
