@@ -179,10 +179,31 @@ ensure_evm_key() {
   if [[ -f "$path" ]]; then
     return
   fi
-  "$PYTHON_BIN" - <<PY >"$path"
+  local keygen_python="$PYTHON_BIN"
+  if [[ -n "${VIRTUAL_ENV:-}" ]] && command -v python >/dev/null 2>&1; then
+    keygen_python="$(command -v python)"
+  elif [[ -x "$VENV_DIR/bin/python" ]]; then
+    keygen_python="$VENV_DIR/bin/python"
+  fi
+  "$keygen_python" - <<PY >"$path"
 from eth_account import Account
 print(Account.create().key.hex())
 PY
+}
+
+verify_runtime_python_deps() {
+  if ! python - <<'PY' >/dev/null 2>&1
+from eth_account import Account
+import fastapi
+import httpx
+import pydantic_settings
+print(Account)
+PY
+  then
+    echo "Worker runtime Python dependencies did not import correctly from the virtual environment." >&2
+    echo "Try removing .venv and rerunning onboarding." >&2
+    exit 1
+  fi
 }
 
 setup_node_nexus_agent() {
@@ -420,6 +441,7 @@ fi
 log_step "Installing Python dependencies for the worker runtime."
 source "$VENV_DIR/bin/activate"
 python -m pip install --disable-pip-version-check -e "$ROOT/platform" -e "$ROOT/integrations"
+verify_runtime_python_deps
 
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
   setup_node_nexus_agent
