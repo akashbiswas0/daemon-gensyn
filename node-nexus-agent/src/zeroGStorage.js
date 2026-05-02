@@ -7,7 +7,17 @@ import { ethers } from "ethers";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, "..");
+const sourceRoot = path.resolve(__dirname, "..");
+
+// The python-agent prints report paths relative to NODE_NEXUS_RUNTIME_DIR
+// (set by OnboardWorker to platform/operator/runtime/browser-runtime). When
+// that override is in effect, resolving against the source tree would point
+// at a non-existent artifacts/ directory inside node-nexus-agent itself.
+function reportRoot(env) {
+  return env.NODE_NEXUS_RUNTIME_DIR
+    ? path.resolve(env.NODE_NEXUS_RUNTIME_DIR)
+    : sourceRoot;
+}
 
 const DEFAULT_STORAGE_RPC_URL = "https://evmrpc-testnet.0g.ai";
 const DEFAULT_STORAGE_INDEXER_RPC = "https://indexer-storage-testnet-turbo.0g.ai";
@@ -60,7 +70,7 @@ export async function uploadReportToZeroGStorage(reportPath, env = process.env) 
 
   const absoluteReportPath = path.isAbsolute(reportPath)
     ? reportPath
-    : path.resolve(projectRoot, reportPath);
+    : path.resolve(reportRoot(env), reportPath);
 
   if (!existsSync(absoluteReportPath)) {
     throw new Error(`Report PDF not found at ${absoluteReportPath}`);
