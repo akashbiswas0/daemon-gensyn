@@ -147,16 +147,32 @@ class DaemonRuntime:
             return response.json()
 
     async def send_raw_message(self, peer_id: str, message: DemoTransportMessage) -> None:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{self.settings.axl_node_url}/send",
-                content=message.model_dump_json().encode("utf-8"),
-                headers={
-                    "X-Destination-Peer-Id": peer_id,
-                    "Content-Type": "application/octet-stream",
-                },
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.settings.axl_node_url}/send",
+                    content=message.model_dump_json().encode("utf-8"),
+                    headers={
+                        "X-Destination-Peer-Id": peer_id,
+                        "Content-Type": "application/octet-stream",
+                    },
+                )
+                response.raise_for_status()
+            logger.info(
+                "raw send ok kind=%s peer=%s request_id=%s",
+                message.kind,
+                peer_id[:12],
+                message.request_id[:8],
             )
-            response.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "raw send FAILED kind=%s peer=%s request_id=%s err=%s",
+                message.kind,
+                peer_id[:12],
+                message.request_id[:8],
+                exc,
+            )
+            raise
 
     async def send_demo_request(
         self,
@@ -190,18 +206,31 @@ class DaemonRuntime:
             return False
         try:
             message = DemoTransportMessage.model_validate_json(response.content)
-        except Exception:
+        except Exception as exc:
+            logger.warning("recv: failed to decode demo message from peer=%s err=%s", from_peer_id[:12], exc)
             return True
         if message.protocol != "nodehub-demo":
+            logger.info("recv: ignoring foreign protocol=%s from peer=%s", message.protocol, from_peer_id[:12])
             return True
-        await self.handle_demo_message(from_peer_id, message)
+        logger.info(
+            "recv ok kind=%s from=%s request_id=%s",
+            message.kind,
+            from_peer_id[:12],
+            message.request_id[:8],
+        )
+        try:
+            await self.handle_demo_message(from_peer_id, message)
+        except Exception as exc:
+            logger.exception("handle_demo_message FAILED kind=%s from=%s err=%s", message.kind, from_peer_id[:12], exc)
         return True
 
     async def recv_loop(self) -> None:
+        logger.info("recv_loop: starting (axl=%s)", self.settings.axl_node_url)
         while True:
             try:
                 handled = await self.poll_recv_once()
-            except Exception:
+            except Exception as exc:
+                logger.debug("recv_loop poll error: %s", exc)
                 handled = False
             if not handled:
                 await asyncio.sleep(0.5)
@@ -893,6 +922,17 @@ class DaemonRuntime:
         self.verify_envelope(envelope)
         is_new = not self.store.has_event(envelope.event_id)
         self.store.append(envelope)
+        try:
+            ad = NodeAdvertisement.model_validate(envelope.payload)
+            logger.info(
+                "store ad signer=%s region=%s caps=%s new=%s",
+                envelope.signer_peer_id[:12],
+                ad.region,
+                [cap.name.value for cap in ad.capabilities],
+                is_new,
+            )
+        except Exception:
+            pass
         if not is_new:
             return False
 
@@ -911,7 +951,13 @@ class DaemonRuntime:
     async def announce_current_advertisement(self) -> None:
         envelope = self.current_advertisement_envelope()
         self.store.append(envelope)
-        for peer_id in await self.seed_peer_ids([]):
+        peer_ids = await self.seed_peer_ids([])
+        logger.info(
+            "announce: pushing own advertisement to %d peer(s): %s",
+            len(peer_ids),
+            [pid[:12] for pid in peer_ids],
+        )
+        for peer_id in peer_ids:
             try:
                 await self.publish_advertisement(peer_id, envelope)
             except Exception:
@@ -1232,6 +1278,11 @@ class DaemonRuntime:
     async def discover_remote_nodes(self, explicit_peers: list[str] | None = None, depth: int = 1) -> list[dict[str, Any]]:
         self.store.append(self.current_advertisement_envelope())
         peer_ids = await self.seed_peer_ids(explicit_peers or [])
+        logger.info(
+            "discover: sending discover_request to %d peer(s): %s",
+            len(peer_ids),
+            [pid[:12] for pid in peer_ids],
+        )
         for peer_id in peer_ids:
             try:
                 await self.send_raw_message(
@@ -1432,6 +1483,11 @@ class DaemonRuntime:
 
 
 def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
+    # Ensure our INFO-level diagnostics from this module are visible alongside
+    # uvicorn's logs. uvicorn's default Python root logger is WARNING; without
+    # this, send/recv/discover/announce traces would be silently dropped.
+    if not logger.handlers and logger.level == logging.NOTSET:
+        logger.setLevel(logging.INFO)
     app = FastAPI(title="NodeHub Daemon", version="0.2.0")
     runtime = DaemonRuntime(settings or get_settings())
     advertise_task: asyncio.Task | None = None

@@ -243,7 +243,7 @@ trap stop_demo INT TERM
 
 : >"$TAIL_PID_FILE"
 stream_log "WEB" $'\033[38;5;45m' "$LOG_DIR/dashboard.log" 'Starting|Ready|Compiled|Local:|Network:|WARN|Warning|ERROR|Error|Failed|Traceback'
-stream_log "CUSTOMER-DAEMON" $'\033[38;5;220m' "$LOG_DIR/customer-daemon.log" 'Started server process|Application startup complete|Uvicorn running|POST /|ERROR|Traceback|Exception'
+stream_log "CUSTOMER-DAEMON" $'\033[38;5;220m' "$LOG_DIR/customer-daemon.log" 'Started server process|Application startup complete|Uvicorn running|POST /|ERROR|Traceback|Exception|raw send|recv ok|recv:|recv_loop|discover:|announce:|store ad'
 stream_log "CUSTOMER-NODE" $'\033[38;5;223m' "$LOG_DIR/customer-node.log"
 
 wait
