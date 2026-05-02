@@ -192,12 +192,19 @@ CUSTOMER_KEY="$RUNTIME_DIR/customer.pem"
 CUSTOMER_WALLET_KEY="$RUNTIME_DIR/customer-wallet.key"
 ensure_evm_key "$CUSTOMER_WALLET_KEY"
 
+CUSTOMER_PEERS_JSON='[]'
+if [[ -n "${NODEHUB_OPERATOR_SEED_PEER:-}" ]]; then
+  # Lets the requester pre-dial a known operator on the LAN so the link forms
+  # even if the operator hasn't dialed in yet. Format: tls://<ip>:9101.
+  CUSTOMER_PEERS_JSON="[\"$NODEHUB_OPERATOR_SEED_PEER\"]"
+fi
+
 write_node_config \
   "$RUNTIME_DIR/customer-node.json" \
   "$CUSTOMER_KEY" \
   9002 \
   '["tls://0.0.0.0:9101"]' \
-  '[]' \
+  "$CUSTOMER_PEERS_JSON" \
   "" \
   9003 \
   "http://127.0.0.1" \

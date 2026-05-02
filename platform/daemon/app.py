@@ -12,17 +12,13 @@ class _LoopbackProbeFilter(logging.Filter):
     _NOISY_PATHS = ("/health", "/identity", "/.well-known/agent-card.json")
 
     def filter(self, record: logging.LogRecord) -> bool:
-        args = record.args
-        if not isinstance(args, tuple) or len(args) < 3:
+        try:
+            message = record.getMessage()
+        except Exception:
             return True
-        client_addr, request_line = str(args[0]), str(args[1])
-        if not client_addr.startswith("127.0.0.1"):
+        if "127.0.0.1" not in message:
             return True
-        # request_line looks like 'GET /health HTTP/1.1'
-        parts = request_line.split(" ", 2)
-        if len(parts) < 2:
-            return True
-        return parts[1] not in self._NOISY_PATHS
+        return not any(f" {path} " in message for path in self._NOISY_PATHS)
 
 
 logging.getLogger("uvicorn.access").addFilter(_LoopbackProbeFilter())
