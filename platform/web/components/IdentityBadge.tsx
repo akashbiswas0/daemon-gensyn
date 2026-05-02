@@ -15,10 +15,16 @@ type Identity = {
   payment_mode: string;
 };
 
-export function IdentityBadge() {
+function formatIdentity(identity: Identity) {
+  return `${identity.region.toUpperCase()} · ${identity.wallet_address.slice(0, 6)}...${identity.wallet_address.slice(-4)}`;
+}
+
+export function IdentityBadge({ initialIdentity = null }: { initialIdentity?: Identity | null }) {
   const router = useRouter();
-  const [identity, setIdentity] = useState<Identity | null>(null);
-  const [status, setStatus] = useState("Connecting...");
+  const [identity, setIdentity] = useState<Identity | null>(initialIdentity);
+  const [status, setStatus] = useState(
+    initialIdentity ? formatIdentity(initialIdentity) : "Daemon unavailable",
+  );
   const [discovering, setDiscovering] = useState(false);
 
   useEffect(() => {
@@ -30,13 +36,15 @@ export function IdentityBadge() {
         }
         const payload = await response.json();
         setIdentity(payload);
-        setStatus(`${payload.label} · ${payload.region.toUpperCase()} · ${payload.wallet_address.slice(0, 6)}...${payload.wallet_address.slice(-4)}`);
+        setStatus(formatIdentity(payload));
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Failed to reach local daemon");
+        if (!initialIdentity) {
+          setStatus(error instanceof Error ? error.message : "Failed to reach local daemon");
+        }
       }
     };
     load();
-  }, []);
+  }, [initialIdentity]);
 
   async function discover() {
     setDiscovering(true);
@@ -50,7 +58,7 @@ export function IdentityBadge() {
         throw new Error(`Discovery failed (${response.status})`);
       }
       const payload = await response.json();
-        setStatus(`Discovered ${payload.length} nodes.`);
+      setStatus(`Discovered ${payload.length} nodes.`);
       router.refresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Discovery failed");
@@ -63,7 +71,7 @@ export function IdentityBadge() {
     <div className="identity-badge">
       <div className="identity-text">
         <strong>{identity ? identity.label : "Local daemon"}</strong>
-        <span>{identity ? `${identity.region.toUpperCase()} · ${identity.wallet_address.slice(0, 6)}...${identity.wallet_address.slice(-4)}` : status}</span>
+        <span>{identity ? formatIdentity(identity) : status}</span>
       </div>
       <button className="button button-ghost button-small" onClick={discover} disabled={discovering}>
         {discovering ? "Syncing..." : "Discover"}

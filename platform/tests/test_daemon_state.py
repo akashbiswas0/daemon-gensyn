@@ -344,3 +344,47 @@ def test_advertise_node_tool_imports_remote_advertisement(tmp_path) -> None:
     assert result == {"stored": True}
     nodes = runtime.store.known_nodes()
     assert any(node["peer_id"] == sender.peer_id and node["region"] == "new-york" for node in nodes)
+
+
+def test_advertise_node_tool_relays_new_remote_advertisement(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path / "receiver"),
+            daemon_enable_worker=False,
+        )
+    )
+    receiver = LocalIdentity.load(state_dir=str(tmp_path / "receiver"), peer_id="receiver-peer")
+    sender = LocalIdentity.load(state_dir=str(tmp_path / "sender"), peer_id="sender-peer")
+    runtime.peer_id = receiver.peer_id
+    runtime.identity = receiver
+
+    advertisement = NodeAdvertisement(
+        peer_id=sender.peer_id,
+        wallet_address=sender.wallet_address,
+        label="Remote Worker",
+        region="new-york",
+        country_code="US",
+        capabilities=[NodeCapability(name=CapabilityName.HTTP_CHECK, description="http", price_per_invocation=0.25)],
+        max_concurrency=2,
+    )
+    envelope = sender.sign_envelope("node_advertisement", advertisement.model_dump(mode="json"))
+
+    published: list[str] = []
+
+    async def fake_seed_peer_ids(_: list[str]) -> list[str]:
+        return ["peer-a", sender.peer_id, "peer-b"]
+
+    async def fake_publish(peer_id: str, relay_envelope) -> dict[str, bool]:
+        assert relay_envelope.event_id == envelope.event_id
+        published.append(peer_id)
+        return {"stored": True}
+
+    runtime.seed_peer_ids = fake_seed_peer_ids  # type: ignore[method-assign]
+    runtime.publish_advertisement = fake_publish  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        runtime.handle_nodehub_tool_call("advertise_node", {"envelope": envelope.model_dump(mode="json")})
+    )
+
+    assert result == {"stored": True}
+    assert published == ["peer-a", "peer-b"]

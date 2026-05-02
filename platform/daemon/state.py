@@ -32,8 +32,7 @@ class LocalEventStore:
         self.event_log_path.touch(exist_ok=True)
 
     def append(self, envelope: SignedEnvelope) -> LocalEventRecord:
-        existing = {record.envelope.event_id for record in self.all_records()}
-        if envelope.event_id in existing:
+        if self.has_event(envelope.event_id):
             for record in self.all_records():
                 if record.envelope.event_id == envelope.event_id:
                     return record
@@ -45,6 +44,12 @@ class LocalEventStore:
 
     def import_many(self, envelopes: list[SignedEnvelope]) -> list[LocalEventRecord]:
         return [self.append(envelope) for envelope in envelopes]
+
+    def has_event(self, event_id: str) -> bool:
+        for record in self.all_records():
+            if record.envelope.event_id == event_id:
+                return True
+        return False
 
     def all_records(self) -> list[LocalEventRecord]:
         records: list[LocalEventRecord] = []
@@ -223,7 +228,7 @@ class LocalEventStore:
             status = JobStatus.RUNNING.value
             if receipts:
                 status = JobStatus.COMPLETED.value
-                jobs.append(
+            jobs.append(
                 {
                     "id": job_id,
                     "task_type": request.task_type.value,

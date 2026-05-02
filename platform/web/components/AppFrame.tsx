@@ -6,6 +6,16 @@ import { ReactNode } from "react";
 
 import { IdentityBadge } from "./IdentityBadge";
 
+type Identity = {
+  wallet_address: string;
+  peer_id: string;
+  label: string;
+  region: string;
+  country_code: string;
+  worker_enabled: boolean;
+  payment_mode: string;
+};
+
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/jobs", label: "Jobs" },
@@ -31,7 +41,7 @@ function pageMeta(pathname: string) {
   return { title: "NodeHub Console", subtitle: "Local AXL control surface." };
 }
 
-export function AppFrame({ children }: { children: ReactNode }) {
+export function AppFrame({ children, initialIdentity = null }: { children: ReactNode; initialIdentity?: Identity | null }) {
   const pathname = usePathname();
   const isMarketing = pathname === "/" || pathname === "/operators";
   const meta = pageMeta(pathname);
@@ -82,8 +92,7 @@ export function AppFrame({ children }: { children: ReactNode }) {
             <p>{meta.subtitle}</p>
           </div>
           <div className="console-actions">
-            
-            <IdentityBadge />
+            <IdentityBadge initialIdentity={initialIdentity} />
           </div>
         </header>
         <main className="console-content">{children}</main>

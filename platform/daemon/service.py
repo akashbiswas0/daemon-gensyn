@@ -711,6 +711,25 @@ class DaemonRuntime:
             fallback_tool_name="advertise_node",
         )
 
+    async def store_and_relay_advertisement(self, envelope: SignedEnvelope) -> bool:
+        self.verify_envelope(envelope)
+        is_new = not self.store.has_event(envelope.event_id)
+        self.store.append(envelope)
+        if not is_new:
+            return False
+
+        relay_peer_ids = [
+            peer_id
+            for peer_id in await self.seed_peer_ids([])
+            if peer_id not in {self.peer_id, envelope.signer_peer_id}
+        ]
+        for peer_id in relay_peer_ids:
+            try:
+                await self.publish_advertisement(peer_id, envelope)
+            except Exception:
+                continue
+        return True
+
     async def announce_current_advertisement(self) -> None:
         envelope = self.current_advertisement_envelope()
         self.store.append(envelope)
@@ -994,9 +1013,8 @@ class DaemonRuntime:
             return {"envelopes": envelopes}
         if tool_name == "advertise_node":
             envelope = SignedEnvelope.model_validate(arguments["envelope"])
-            self.verify_envelope(envelope)
-            self.store.append(envelope)
-            return {"stored": True}
+            stored = await self.store_and_relay_advertisement(envelope)
+            return {"stored": stored}
         if tool_name == "request_quote":
             envelope = SignedEnvelope.model_validate(arguments["envelope"])
             result = await self.handle_quote_request(envelope)
@@ -1228,9 +1246,8 @@ class DaemonRuntime:
                 return {"jsonrpc": "2.0", "id": payload.id, "result": {"envelopes": envelopes}}
             if payload.method == "advertise_node":
                 envelope = SignedEnvelope.model_validate(params["envelope"])
-                self.verify_envelope(envelope)
-                self.store.append(envelope)
-                return {"jsonrpc": "2.0", "id": payload.id, "result": {"stored": True}}
+                stored = await self.store_and_relay_advertisement(envelope)
+                return {"jsonrpc": "2.0", "id": payload.id, "result": {"stored": stored}}
             if payload.method == "request_quote":
                 envelope = SignedEnvelope.model_validate(params["envelope"])
                 result = await self.handle_quote_request(envelope)
