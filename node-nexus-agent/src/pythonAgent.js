@@ -7,12 +7,16 @@ import { logStep, truncate } from "./logging.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, "..");
-const agentPath = path.join(projectRoot, "python-agent", "agent.py");
-const venvPython =
+const sourceRoot = path.resolve(__dirname, "..");
+const runtimeRoot = process.env.NODE_NEXUS_RUNTIME_DIR
+  ? path.resolve(process.env.NODE_NEXUS_RUNTIME_DIR)
+  : sourceRoot;
+const agentPath = path.join(sourceRoot, "python-agent", "agent.py");
+const defaultVenvPython =
   process.platform === "win32"
-    ? path.join(projectRoot, "python-agent", "venv", "Scripts", "python.exe")
-    : path.join(projectRoot, "python-agent", "venv", "bin", "python3");
+    ? path.join(runtimeRoot, "python-agent", "venv", "Scripts", "python.exe")
+    : path.join(runtimeRoot, "python-agent", "venv", "bin", "python3");
+const venvPython = process.env.NODE_NEXUS_PYTHON_BIN || defaultVenvPython;
 
 function parseInfoValue(value) {
   const trimmed = String(value ?? "").trim();
@@ -98,7 +102,7 @@ export function runPythonAgent({ url, task, requestId }) {
       venvPython,
       [agentPath, url, task, "--request-id", requestId],
       {
-        cwd: projectRoot,
+        cwd: runtimeRoot,
         env: process.env,
         timeout: 10 * 60 * 1000,
         maxBuffer: 1024 * 1024 * 10

@@ -1,7 +1,6 @@
 import Link from "next/link";
 
 import { CopyableId } from "../../components/CopyableId";
-import { DaemonHealthPanel } from "../../components/DaemonHealthPanel";
 import { RegionHeatmap } from "../../components/RegionHeatmap";
 import { getIdentity, getJobs, getNodes } from "../../lib/api";
 
@@ -14,9 +13,6 @@ export default async function DashboardPage() {
     getJobs().catch(() => []),
   ]);
   const liveNodes = nodes;
-  const browserNodes = liveNodes.filter((node: any) =>
-    (node.capabilities ?? []).some((cap: any) => cap?.name === "browser_task"),
-  );
   const completedJobs = jobs.filter((job: any) => job.status === "completed");
 
   const regionSet = new Set<string>();
@@ -27,8 +23,8 @@ export default async function DashboardPage() {
     <div className="dashboard-stack">
       <section className="dash-kpis">
         <div className="kpi">
-          <span className="kpi-label">Active browser workers</span>
-          <strong className="kpi-num">{browserNodes.length}</strong>
+          <span className="kpi-label">Active operators</span>
+          <strong className="kpi-num">{liveNodes.length}</strong>
           <span className="kpi-sub">live now</span>
         </div>
         <div className="kpi">
@@ -38,8 +34,8 @@ export default async function DashboardPage() {
         </div>
         <div className="kpi">
           <span className="kpi-label">Execution mode</span>
-          <strong className="kpi-num">Browser</strong>
-          <span className="kpi-sub">0G-backed tasks only</span>
+          <strong className="kpi-num">Browser + HTTP</strong>
+          <span className="kpi-sub">0G primary, HTTP fallback</span>
         </div>
         <div className="kpi">
           <span className="kpi-label">Regions</span>
@@ -73,9 +69,7 @@ export default async function DashboardPage() {
           </div>
         </article>
 
-        <RegionHeatmap />
-
-        <DaemonHealthPanel />
+        <RegionHeatmap initialNodes={liveNodes} className="dashboard-heatmap" />
       </section>
 
       <section className="activity-grid">
@@ -113,15 +107,19 @@ export default async function DashboardPage() {
 
         <article className="surface-card">
           <div className="kicker">Focus</div>
-          <h3>Browser-task network</h3>
+          <h3>Browser-first operator mesh</h3>
           <p className="muted">
-            Only active browser-task operators are shown and targeted. Lease negotiation and legacy WebOps probes have
-            been removed from the product surface.
+            Only active operators are shown and targeted. Browser tasks stay primary, with HTTP checks retained as the
+            lightweight fallback capability.
           </p>
           <div className="stack" style={{ gap: 8 }}>
             <div className="meta-row">
               <span className="muted">Primary capability</span>
               <strong>browser_task</strong>
+            </div>
+            <div className="meta-row">
+              <span className="muted">Secondary capability</span>
+              <strong>http_check</strong>
             </div>
             <div className="meta-row">
               <span className="muted">Worker onboarding</span>

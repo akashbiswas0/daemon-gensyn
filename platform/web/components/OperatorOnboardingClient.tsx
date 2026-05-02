@@ -167,7 +167,7 @@ export function OperatorOnboardingClient() {
           <p className="muted">
             The NodeHub worker runtime includes the browser runtime by default. <code>./OnboardWorker</code> prompts
             for your 0G testnet API key and storage private key on first run and stores them inside the same worker
-            runtime config — there is no separate <code>node-nexus-agent/.env</code> contract to maintain.
+            runtime config, alongside the AXL and daemon settings.
           </p>
           <div className="row">
             <button type="button" className="button" onClick={connectWallet}>
@@ -255,7 +255,7 @@ export function OperatorOnboardingClient() {
                     disabled={capability.required}
                   >
                     <strong>{capability.label}</strong>
-                    <span>{capability.id}</span>
+                    <span>{capability.required ? `${capability.id} · required` : capability.id}</span>
                   </button>
                 );
               })}

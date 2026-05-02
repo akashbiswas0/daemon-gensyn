@@ -26,8 +26,11 @@ from reporting import (
     summarize_history,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_ROOT = Path(os.getenv("NODE_NEXUS_RUNTIME_DIR", str(SOURCE_ROOT))).expanduser().resolve()
+ARTIFACTS_ROOT = Path(
+    os.getenv("NODE_NEXUS_ARTIFACT_ROOT", str(RUNTIME_ROOT / "artifacts"))
+).expanduser().resolve()
 DEFAULT_ZEROG_BASE_URL = "https://router-api-testnet.integratenetwork.work/v1"
 BROWSER_USE_ACTION_SCHEMA_HINT = (
     "Use one concise browser action at a time. Do not use screenshot or PDF tools; call done when the "
@@ -739,7 +742,11 @@ def info(key: str, value: Any) -> None:
 
 
 def project_relative(path: Path) -> str:
-    return path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(RUNTIME_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
 
 
 def sanitize_request_id(value: str) -> str:
@@ -814,7 +821,8 @@ async def main() -> None:
     ACTIVE_INITIAL_URL = initial_url
     RESULT_PAGE_NAVIGATION_SEEN = False
 
-    load_dotenv(PROJECT_ROOT / ".env")
+    env_file = os.getenv("NODE_NEXUS_ENV_FILE", str(RUNTIME_ROOT / ".env"))
+    load_dotenv(env_file)
     info("artifactDir", project_relative(artifact_dir))
 
     api_key = os.getenv("ZEROG_API_KEY")

@@ -8,11 +8,13 @@ PID_FILE="$RUNTIME_DIR/pids.txt"
 VENV_DIR="$ROOT/.venv"
 WORKER_ENV_FILE="$RUNTIME_DIR/worker.env"
 STATE_DIR="$RUNTIME_DIR/worker-state"
+BROWSER_RUNTIME_DIR="$RUNTIME_DIR/browser-runtime"
+BROWSER_ARTIFACT_DIR="$BROWSER_RUNTIME_DIR/artifacts"
 NODE_CONFIG_PATH="$RUNTIME_DIR/worker-node.json"
 NODE_KEY_PATH="$RUNTIME_DIR/worker-node.pem"
 SIGNING_KEY_PATH="$RUNTIME_DIR/worker-signing-wallet.key"
 NEXUS_DIR="$ROOT/node-nexus-agent"
-NEXUS_VENV_DIR="$NEXUS_DIR/python-agent/venv"
+NEXUS_VENV_DIR="$BROWSER_RUNTIME_DIR/python-agent/venv"
 NEXUS_PORT="8080"
 NEXUS_URL="http://127.0.0.1:${NEXUS_PORT}"
 LOG_PREFIX="operator-worker"
@@ -227,6 +229,22 @@ PY
   fi
 }
 
+prompt_secret_if_missing() {
+  local var_name="$1"
+  local prompt="$2"
+  local current_value="${!var_name:-}"
+  if [[ -n "$current_value" ]]; then
+    return
+  fi
+  read -r -s -p "$prompt" current_value
+  echo ""
+  if [[ -z "$current_value" ]]; then
+    echo "$var_name is required when browser_task is enabled." >&2
+    exit 1
+  fi
+  printf -v "$var_name" '%s' "$current_value"
+}
+
 setup_browser_runtime() {
   require_cmd node
   require_cmd npm
@@ -237,6 +255,7 @@ setup_browser_runtime() {
   fi
 
   log_step "Preparing NodeHub browser runtime dependencies."
+  mkdir -p "$BROWSER_RUNTIME_DIR" "$BROWSER_ARTIFACT_DIR"
 
   if [[ ! -d "$NEXUS_DIR/node_modules" ]]; then
     (cd "$NEXUS_DIR" && npm install --no-fund --no-audit)
@@ -246,6 +265,7 @@ setup_browser_runtime() {
 
   if [[ ! -d "$NEXUS_VENV_DIR" ]]; then
     log_step "Creating browser runtime Python virtual environment."
+    mkdir -p "$(dirname "$NEXUS_VENV_DIR")"
     "$PYTHON_BIN" -m venv "$NEXUS_VENV_DIR"
   fi
 
@@ -257,7 +277,8 @@ setup_browser_runtime() {
 
   if [[ ! -f "$NEXUS_VENV_DIR/.playwright-ready" ]]; then
     log_step "Installing Playwright Chromium for browser runtime."
-    "$nexus_python" -m playwright install chromium
+    PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$BROWSER_RUNTIME_DIR/playwright-browsers}" \
+      "$nexus_python" -m playwright install chromium
     touch "$NEXUS_VENV_DIR/.playwright-ready"
   else
     log_step "Reusing existing Playwright Chromium install for browser runtime."
@@ -441,11 +462,8 @@ if [[ "$OPENAI_ENABLED" != "true" ]]; then
 fi
 
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
-  # Phase 1: bake-in shared 0G testnet credentials so onboarding "just works"
-  # without an interactive credential prompt. Phase 2 will replace this with
-  # per-operator credentials.
-  ZEROG_API_KEY="${ZEROG_API_KEY:-sk-26b61d91-e273-40cb-9bdb-189de164284f}"
-  ZEROG_PRIVATE_KEY="${ZEROG_PRIVATE_KEY:-8b29ae03676c478a17c99bcace68ea456b9a37e20db6269c551355537b18c775}"
+  prompt_secret_if_missing "ZEROG_API_KEY" "0G router API key (stored in the local worker runtime): "
+  prompt_secret_if_missing "ZEROG_PRIVATE_KEY" "0G storage private key (stored in the local worker runtime): "
 fi
 
 if [[ -f "$PID_FILE" ]]; then
@@ -482,7 +500,7 @@ if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
   setup_browser_runtime
 fi
 
-mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$STATE_DIR"
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$STATE_DIR" "$BROWSER_RUNTIME_DIR" "$BROWSER_ARTIFACT_DIR"
 : >"$PID_FILE"
 [[ -f "$NODE_KEY_PATH" ]] || openssl genpkey -algorithm ed25519 -out "$NODE_KEY_PATH" >/dev/null 2>&1
 ensure_evm_key "$SIGNING_KEY_PATH"
@@ -510,11 +528,13 @@ write_env_line "NODEHUB_AGENTIC_ENABLED" "true"
 write_env_line "NODEHUB_OPENAI_API_KEY" "$OPENAI_KEY"
 
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
-  # Browser runtime env. Picked up by the node-nexus browser runtime via
-  # process.env (dotenv does not override values already exported in the shell
-  # that launches it). Phase 1 bakes in shared 0G testnet credentials directly
-  # so operators never need to manage a separate .env file. Phase 2 will move
-  # these to per-operator credentials.
+  # Browser runtime env. The vendored browser runtime reads these values from
+  # the unified worker runtime env; operators do not manage a separate app or
+  # a separate `.env`.
+  write_env_line "NODE_NEXUS_RUNTIME_DIR" "$BROWSER_RUNTIME_DIR"
+  write_env_line "NODE_NEXUS_ARTIFACT_ROOT" "$BROWSER_ARTIFACT_DIR"
+  write_env_line "NODE_NEXUS_ENV_FILE" "$WORKER_ENV_FILE"
+  write_env_line "NODE_NEXUS_PYTHON_BIN" "$NEXUS_VENV_DIR/bin/python3"
   write_env_line "NODE_NAME" "${NODE_NAME:-pookie-laptop-node1}"
   write_env_line "ENS_IDENTITY" "${ENS_IDENTITY:-your-node.eth}"
   write_env_line "ZEROG_API_KEY" "$ZEROG_API_KEY"
@@ -525,7 +545,7 @@ if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
   write_env_line "ZEROG_STORAGE_INDEXER_RPC" "${ZEROG_STORAGE_INDEXER_RPC:-https://indexer-storage-testnet-turbo.0g.ai}"
   write_env_line "BROWSER_HEADLESS" "${BROWSER_HEADLESS:-false}"
   write_env_line "ARTIFACT_RETENTION" "${ARTIFACT_RETENTION:-keep}"
-  write_env_line "PAYOUT_ADDRESS" "${PAYOUT_ADDRESS:-0x936cEfb89d47F620EAb665D9Bd27BA06b0cF11c7}"
+  write_env_line "PLAYWRIGHT_BROWSERS_PATH" "${PLAYWRIGHT_BROWSERS_PATH:-$BROWSER_RUNTIME_DIR/playwright-browsers}"
 fi
 
 start_process "${LOG_PREFIX}-node" "cd '$ROOT' && ./node -config '$NODE_CONFIG_PATH'"

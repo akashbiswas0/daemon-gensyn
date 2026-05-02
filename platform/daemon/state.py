@@ -223,12 +223,12 @@ class LocalEventStore:
             status = JobStatus.RUNNING.value
             if receipts:
                 status = JobStatus.COMPLETED.value
-            jobs.append(
+                jobs.append(
                 {
                     "id": job_id,
                     "task_type": request.task_type.value,
                     "status": status,
-                    "regions": [],
+                    "regions": plans.get(job_id).requested_regions if job_id in plans else [],
                     "lease_id": request.lease_id,
                     "primary_receipt_count": len(receipts),
                     "verification_receipt_count": len(verification_receipts.get(job_id, [])),

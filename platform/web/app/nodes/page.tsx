@@ -13,7 +13,7 @@ export default async function NodesPage() {
         <article className="surface-card">
           <div className="kicker">Network Reach</div>
           <h3>{activeNodes.length} active peers</h3>
-          <p className="muted">Signed worker ads in local state.</p>
+          <p className="muted">Only fresh, reachable worker advertisements are shown.</p>
         </article>
         <article className="surface-card">
           <div className="kicker">Capabilities</div>
@@ -24,7 +24,7 @@ export default async function NodesPage() {
             )}{" "}
             advertised tools
           </h3>
-          <p className="muted">Active browser-task tools per worker.</p>
+          <p className="muted">Browser-task and HTTP-check tools per active worker.</p>
         </article>
         <article className="surface-card">
           <div className="kicker">Visibility</div>
@@ -35,10 +35,10 @@ export default async function NodesPage() {
 
       <section className="surface-card">
         <div className="stack-header">
-          <div>
-            <div className="kicker">Discovered Peers</div>
-            <h3>Known worker advertisements</h3>
-          </div>
+            <div>
+              <div className="kicker">Discovered Peers</div>
+              <h3>Live worker advertisements</h3>
+            </div>
         </div>
         <table className="table">
           <thead>

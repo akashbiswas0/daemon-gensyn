@@ -7,7 +7,12 @@ import { RegionMultiSelect } from "./RegionMultiSelect";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
 
-export function CreateJobForm() {
+type RegionOption = {
+  region: string;
+  countryCode: string;
+};
+
+export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOption[] }) {
   const router = useRouter();
   const [taskType, setTaskType] = useState<"browser_task" | "http_check">("browser_task");
   const [target, setTarget] = useState("https://example.com");
@@ -72,7 +77,7 @@ export function CreateJobForm() {
         </label>
         <div className="field">
           <span>Regions</span>
-          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Select regions" />
+          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Select regions" options={regionOptions} />
         </div>
       </div>
       <label className="field">

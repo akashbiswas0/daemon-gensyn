@@ -621,19 +621,6 @@ class DaemonRuntime:
                 self.store_settlement(settlement)
         await self.reconcile_settlements_from_chain()
 
-    async def fetch_agent_card(self, peer_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(f"{self.settings.axl_node_url}/a2a/{peer_id}")
-            response.raise_for_status()
-            return response.json()
-
-    def card_supports_coordination(self, card: dict[str, Any]) -> bool:
-        skills = {skill.get("id") for skill in card.get("skills", []) if isinstance(skill, dict)}
-        return (
-            self.settings.nodehub_service_name in skills
-            or {"discover_nodes", "request_job_execution"}.issubset(skills)
-        )
-
     async def live_nodes(self) -> list[dict[str, Any]]:
         # A live node = signed advertisement with active=true and TTL not expired.
         # store.known_nodes() already enforces both (active && expires_at >= now)
@@ -991,9 +978,6 @@ class DaemonRuntime:
                 peer_ids = await self.seed_peer_ids([])
                 for peer_id in peer_ids:
                     try:
-                        card = await self.fetch_agent_card(peer_id)
-                        if not self.card_supports_coordination(card):
-                            continue
                         result = await self.send_coordination_request(
                             peer_id,
                             "discover_nodes",
@@ -1057,9 +1041,6 @@ class DaemonRuntime:
         peer_ids = await self.seed_peer_ids(explicit_peers or [])
         for peer_id in peer_ids:
             try:
-                card = await self.fetch_agent_card(peer_id)
-                if not self.card_supports_coordination(card):
-                    continue
                 result = await self.send_coordination_request(
                     peer_id,
                     "discover_nodes",
@@ -1231,9 +1212,6 @@ class DaemonRuntime:
                     peer_ids = await self.seed_peer_ids([])
                     for peer_id in peer_ids:
                         try:
-                            card = await self.fetch_agent_card(peer_id)
-                            if not self.card_supports_coordination(card):
-                                continue
                             result = await self.send_coordination_request(
                                 peer_id,
                                 "discover_nodes",

@@ -2,4 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPERATOR_ENV="$ROOT/platform/operator/runtime/worker.env"
+
+if [[ -f "$OPERATOR_ENV" ]]; then
+  exec "$ROOT/platform/operator/start_worker.sh"
+fi
+
 exec "$ROOT/platform/demo/start_demo.sh"

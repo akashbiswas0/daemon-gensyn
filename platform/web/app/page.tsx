@@ -22,8 +22,8 @@ export default async function LandingPage() {
             <span className="hero-accent">signed end-to-end.</span>
           </h1>
           <p className="hero-sub">
-            Discover active browser operators over AXL. Run 0G-backed browser tasks and keep every receipt
-            in a daemon you control.
+            Discover active browser operators over AXL. Run 0G-backed browser tasks with HTTP fallback
+            and keep every receipt in a daemon you control.
           </p>
           <div className="hero-actions">
             <Link href="/dashboard" className="btn btn-primary">
@@ -137,7 +137,7 @@ export default async function LandingPage() {
         <article className="split-card">
           <div className="kicker">For Requesters</div>
           <h3>Submit jobs. Inspect signed results.</h3>
-          <p>Target regions, submit browser tasks, and watch outputs return with full provenance.</p>
+          <p>Target regions, submit browser tasks or HTTP checks, and watch outputs return with full provenance.</p>
           <Link href="/dashboard" className="btn btn-link">Try the dashboard →</Link>
         </article>
       </section>

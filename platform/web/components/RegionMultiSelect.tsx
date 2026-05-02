@@ -21,14 +21,19 @@ type Props = {
   value: string[];
   onChange: (next: string[]) => void;
   placeholder?: string;
+  options?: RegionOption[];
 };
 
-export function RegionMultiSelect({ value, onChange, placeholder = "Select regions" }: Props) {
-  const [options, setOptions] = useState<RegionOption[]>([]);
+export function RegionMultiSelect({ value, onChange, placeholder = "Select regions", options: initialOptions = [] }: Props) {
+  const [options, setOptions] = useState<RegionOption[]>(initialOptions);
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (initialOptions.length > 0) {
+      setOptions(initialOptions);
+      return;
+    }
     let alive = true;
     (async () => {
       try {
@@ -55,7 +60,7 @@ export function RegionMultiSelect({ value, onChange, placeholder = "Select regio
     return () => {
       alive = false;
     };
-  }, []);
+  }, [initialOptions]);
 
   useEffect(() => {
     if (!open) return;
