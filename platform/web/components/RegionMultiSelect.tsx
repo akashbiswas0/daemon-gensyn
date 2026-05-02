@@ -27,6 +27,7 @@ type Props = {
 export function RegionMultiSelect({ value, onChange, placeholder = "Select regions", options: initialOptions = [] }: Props) {
   const [options, setOptions] = useState<RegionOption[]>(initialOptions);
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -89,6 +90,15 @@ export function RegionMultiSelect({ value, onChange, placeholder = "Select regio
     onChange(value.filter((v) => v.toLowerCase() !== region.toLowerCase()));
   };
 
+  const addFromDraft = () => {
+    const trimmed = draft.trim().toLowerCase();
+    if (!trimmed) return;
+    if (!valueSet.has(trimmed)) {
+      onChange([...value, trimmed]);
+    }
+    setDraft("");
+  };
+
   const optionByRegion = useMemo(() => {
     const m = new Map<string, RegionOption>();
     for (const opt of options) m.set(opt.region.toLowerCase(), opt);
@@ -144,8 +154,36 @@ export function RegionMultiSelect({ value, onChange, placeholder = "Select regio
       </button>
       {open && (
         <ul className="region-menu" role="listbox">
+          <li
+            className="region-option"
+            role="presentation"
+            onClick={(e) => e.stopPropagation()}
+            style={{ display: "flex", gap: 6, alignItems: "center", padding: 8 }}
+          >
+            <input
+              className="input"
+              placeholder="Type a region (e.g. tokyo)"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addFromDraft();
+                }
+              }}
+              style={{ flex: 1, padding: "6px 8px" }}
+            />
+            <button
+              type="button"
+              className="button button-ghost button-small"
+              onClick={addFromDraft}
+              disabled={!draft.trim()}
+            >
+              Add
+            </button>
+          </li>
           {options.length === 0 ? (
-            <li className="region-empty">No regions discovered yet</li>
+            <li className="region-empty">No regions discovered yet — type one above.</li>
           ) : (
             options.map((opt) => {
               const selected = valueSet.has(opt.region);

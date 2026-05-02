@@ -76,8 +76,11 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
           </select>
         </label>
         <div className="field">
-          <span>Regions</span>
-          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Select regions" options={regionOptions} />
+          <span>Regions <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></span>
+          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Any region" options={regionOptions} />
+          <span className="muted" style={{ fontSize: 12 }}>
+            Leave empty to let the planner pick any matching live operator.
+          </span>
         </div>
       </div>
       <label className="field">
