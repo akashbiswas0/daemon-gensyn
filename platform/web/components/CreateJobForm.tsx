@@ -24,6 +24,10 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function submit() {
+    if (regions.length === 0) {
+      setStatus("Pick at least one region with a live operator before dispatching.");
+      return;
+    }
     setIsSubmitting(true);
     setStatus("");
     const body =
@@ -76,11 +80,8 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
           </select>
         </label>
         <div className="field">
-          <span>Regions <span className="muted" style={{ fontWeight: 400 }}>(optional)</span></span>
-          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Any region" options={regionOptions} />
-          <span className="muted" style={{ fontSize: 12 }}>
-            Leave empty to let the planner pick any matching live operator.
-          </span>
+          <span>Regions</span>
+          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Select regions" options={regionOptions} />
         </div>
       </div>
       <label className="field">

@@ -27,16 +27,15 @@ type Props = {
 export function RegionMultiSelect({ value, onChange, placeholder = "Select regions", options: initialOptions = [] }: Props) {
   const [options, setOptions] = useState<RegionOption[]>(initialOptions);
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Poll /nodes so that newly-onboarded operators (e.g. a worker that just
+  // came online on another laptop) show up in the dropdown without a page
+  // reload. The customer daemon's discovery loop refreshes signed ads every
+  // ~45s; polling at 5s keeps the UI responsive once that import lands.
   useEffect(() => {
-    if (initialOptions.length > 0) {
-      setOptions(initialOptions);
-      return;
-    }
     let alive = true;
-    (async () => {
+    const refresh = async () => {
       try {
         const res = await fetch(`${API_BASE}/nodes`, { cache: "no-store" });
         if (!res.ok) return;
@@ -49,19 +48,21 @@ export function RegionMultiSelect({ value, onChange, placeholder = "Select regio
           if (!region) continue;
           if (!seen.has(region)) seen.set(region, cc);
         }
-        setOptions(
-          Array.from(seen.entries())
-            .map(([region, countryCode]) => ({ region, countryCode }))
-            .sort((a, b) => a.region.localeCompare(b.region)),
-        );
+        const next = Array.from(seen.entries())
+          .map(([region, countryCode]) => ({ region, countryCode }))
+          .sort((a, b) => a.region.localeCompare(b.region));
+        setOptions(next);
       } catch {
-        // leave options empty; the user can still type-fall-back via free-text not available here
+        // leave previous options as-is
       }
-    })();
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 5000);
     return () => {
       alive = false;
+      window.clearInterval(interval);
     };
-  }, [initialOptions]);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -88,15 +89,6 @@ export function RegionMultiSelect({ value, onChange, placeholder = "Select regio
 
   const remove = (region: string) => {
     onChange(value.filter((v) => v.toLowerCase() !== region.toLowerCase()));
-  };
-
-  const addFromDraft = () => {
-    const trimmed = draft.trim().toLowerCase();
-    if (!trimmed) return;
-    if (!valueSet.has(trimmed)) {
-      onChange([...value, trimmed]);
-    }
-    setDraft("");
   };
 
   const optionByRegion = useMemo(() => {
@@ -154,36 +146,8 @@ export function RegionMultiSelect({ value, onChange, placeholder = "Select regio
       </button>
       {open && (
         <ul className="region-menu" role="listbox">
-          <li
-            className="region-option"
-            role="presentation"
-            onClick={(e) => e.stopPropagation()}
-            style={{ display: "flex", gap: 6, alignItems: "center", padding: 8 }}
-          >
-            <input
-              className="input"
-              placeholder="Type a region (e.g. tokyo)"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addFromDraft();
-                }
-              }}
-              style={{ flex: 1, padding: "6px 8px" }}
-            />
-            <button
-              type="button"
-              className="button button-ghost button-small"
-              onClick={addFromDraft}
-              disabled={!draft.trim()}
-            >
-              Add
-            </button>
-          </li>
           {options.length === 0 ? (
-            <li className="region-empty">No regions discovered yet — type one above.</li>
+            <li className="region-empty">No live operators yet. Onboard a worker to populate this list.</li>
           ) : (
             options.map((opt) => {
               const selected = valueSet.has(opt.region);
