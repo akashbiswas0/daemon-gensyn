@@ -137,6 +137,22 @@ start_process() {
   echo "$name:$pid" >>"$PID_FILE"
 }
 
+stream_runtime_logs() {
+  local files=(
+    "$LOG_DIR/${LOG_PREFIX}-node.log"
+    "$LOG_DIR/${LOG_PREFIX}-router.log"
+    "$LOG_DIR/${LOG_PREFIX}-daemon.log"
+  )
+
+  if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+    files+=("$LOG_DIR/${LOG_PREFIX}-nexus.log")
+  fi
+
+  echo ""
+  echo "Streaming worker logs. Press Ctrl+C to stop following logs; the worker keeps running."
+  exec tail -n 20 -F "${files[@]}"
+}
+
 wait_for_http() {
   local url="$1"
   local attempts="${2:-60}"
@@ -534,3 +550,4 @@ echo "- Future requester-side USDC payouts target $LOWER_PAYOUT_WALLET."
 echo ""
 echo "To stop this worker later:"
 echo "  $ROOT/platform/operator/stop_worker.sh"
+stream_runtime_logs
