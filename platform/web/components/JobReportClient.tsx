@@ -52,6 +52,21 @@ type Report = {
     raw?: {
       proof_hash?: string;
       proof_path?: string;
+      orchestrator_url?: string;
+      request?: {
+        url?: string;
+        task?: string;
+      };
+      response?: {
+        ok?: boolean;
+        error?: string;
+        reportHash?: string;
+        reportUri?: string;
+        txHash?: string;
+        reportPath?: string;
+        artifactDir?: string;
+        screenshots?: string[];
+      };
     };
     settlement?: {
       status: string;
@@ -181,6 +196,12 @@ export function JobReportClient({ jobId }: { jobId: string }) {
                   {result.measurement?.dns_answers?.length ? <div>{result.measurement.dns_answers.join(", ")}</div> : null}
                   {result.raw?.proof_hash ? <div>Proof {result.raw.proof_hash}</div> : null}
                   {result.raw?.proof_path ? <div>{result.raw.proof_path}</div> : null}
+                  {result.task_type === "browser_task" && result.raw?.response?.reportHash ? (
+                    <div>Report {result.raw.response.reportHash.slice(0, 14)}...</div>
+                  ) : null}
+                  {result.task_type === "browser_task" && Array.isArray(result.raw?.response?.screenshots) ? (
+                    <div>{result.raw!.response!.screenshots!.length} screenshot{result.raw!.response!.screenshots!.length === 1 ? "" : "s"}</div>
+                  ) : null}
                   {result.failure?.message ? <div>{result.failure.message}</div> : null}
                 </td>
                 <td>
@@ -215,6 +236,60 @@ export function JobReportClient({ jobId }: { jobId: string }) {
           })}
         </tbody>
       </table>
+      {report.results
+        .filter((r) => r.task_type === "browser_task")
+        .map((result) => {
+          const response = result.raw?.response;
+          const request = result.raw?.request;
+          const orchestrator = result.raw?.orchestrator_url;
+          const screenshots = response?.screenshots ?? [];
+          return (
+            <div key={`browser-${result.reservation_id}`} className="surface-card stack" style={{ gap: 8 }}>
+              <div className="kicker">Browser task report</div>
+              {request?.url ? <div className="muted">Start URL: {request.url}</div> : null}
+              {request?.task ? <p>{request.task}</p> : null}
+              {result.success ? (
+                <>
+                  {response?.reportUri ? (
+                    <div>
+                      Report:&nbsp;
+                      <a href={response.reportUri} target="_blank" rel="noreferrer">
+                        {response.reportUri}
+                      </a>
+                    </div>
+                  ) : null}
+                  {response?.reportHash ? (
+                    <div className="muted">Report hash: {response.reportHash}</div>
+                  ) : null}
+                  {response?.txHash ? (
+                    <div className="muted">0G Storage tx: {response.txHash}</div>
+                  ) : null}
+                  {response?.reportPath ? (
+                    <div className="muted">Local PDF on operator: {response.reportPath}</div>
+                  ) : null}
+                  {screenshots.length ? (
+                    <details>
+                      <summary>{screenshots.length} screenshot path{screenshots.length === 1 ? "" : "s"} on operator</summary>
+                      <ul style={{ marginTop: 8 }}>
+                        {screenshots.map((path) => (
+                          <li key={path} className="muted">{path}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+                </>
+              ) : (
+                <div>
+                  <strong>Orchestrator error:&nbsp;</strong>
+                  <span>{response?.error ?? result.failure?.message ?? "no message returned"}</span>
+                  {orchestrator ? (
+                    <div className="muted" style={{ marginTop: 4 }}>via {orchestrator}</div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          );
+        })}
       {report.planner_rationale ? (
         <details className="surface-card">
           <summary>Planner</summary>
