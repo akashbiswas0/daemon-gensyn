@@ -43,6 +43,7 @@ export function CreateLeaseForm() {
           <option value="ping_check">ping_check</option>
           <option value="api_call">api_call</option>
           <option value="cdn_check">cdn_check</option>
+          <option value="browser_task">browser_task</option>
         </select>
       </label>
       <div className="field">

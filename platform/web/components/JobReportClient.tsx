@@ -7,7 +7,6 @@ const isBaseSepolia = (network: string) => network === "base-sepolia" || network
 const explorerTxUrl = (network: string, txHash: string) =>
   isBaseSepolia(network) ? `https://sepolia.basescan.org/tx/${txHash}` : "#";
 const networkLabel = (network: string) => (isBaseSepolia(network) ? "Base Sepolia" : network);
-const keeperhubRunUrl = (runId: string) => `https://app.keeperhub.com/runs/${runId}`;
 
 type Report = {
   job_id: string;
@@ -50,13 +49,16 @@ type Report = {
       dns_answers?: string[];
     };
     failure?: { message?: string } | null;
+    raw?: {
+      proof_hash?: string;
+      proof_path?: string;
+    };
     settlement?: {
       status: string;
       amount: number;
       currency: string;
       worker_wallet: string;
       network: string;
-      keeperhub_run_id?: string | null;
       tx_hash?: string | null;
       failure_reason?: string | null;
     } | null;
@@ -177,6 +179,8 @@ export function JobReportClient({ jobId }: { jobId: string }) {
                   {result.measurement?.provider ? <div>CDN {result.measurement.provider}</div> : null}
                   {result.measurement?.cache_status ? <div>Cache {result.measurement.cache_status}</div> : null}
                   {result.measurement?.dns_answers?.length ? <div>{result.measurement.dns_answers.join(", ")}</div> : null}
+                  {result.raw?.proof_hash ? <div>Proof {result.raw.proof_hash}</div> : null}
+                  {result.raw?.proof_path ? <div>{result.raw.proof_path}</div> : null}
                   {result.failure?.message ? <div>{result.failure.message}</div> : null}
                 </td>
                 <td>
@@ -194,12 +198,6 @@ export function JobReportClient({ jobId }: { jobId: string }) {
                         <div className="muted">
                           <a href={explorerTxUrl(settlement.network, settlement.tx_hash)} target="_blank" rel="noreferrer">
                             {settlement.tx_hash.slice(0, 12)}...
-                          </a>
-                        </div>
-                      ) : settlement.keeperhub_run_id ? (
-                        <div className="muted">
-                          <a href={keeperhubRunUrl(settlement.keeperhub_run_id)} target="_blank" rel="noreferrer">
-                            Run {settlement.keeperhub_run_id.slice(0, 12)}...
                           </a>
                         </div>
                       ) : settlement.failure_reason ? (

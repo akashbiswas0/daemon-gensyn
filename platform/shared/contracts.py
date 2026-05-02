@@ -15,6 +15,7 @@ class CapabilityName(str, Enum):
     PING_CHECK = "ping_check"
     API_CALL = "api_call"
     CDN_CHECK = "cdn_check"
+    BROWSER_TASK = "browser_task"
     DIAGNOSE_FAILURE = "diagnose_failure"
 
 
@@ -179,7 +180,13 @@ class CDNCheckInput(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
-TaskInput = HttpCheckInput | DNSCheckInput | LatencyProbeInput | PingCheckInput | APICallInput | CDNCheckInput
+class BrowserTaskInput(BaseModel):
+    url: HttpUrl
+    task: str = Field(min_length=5, max_length=4000)
+    x402_sig: str = "demo-signature"
+
+
+TaskInput = HttpCheckInput | DNSCheckInput | LatencyProbeInput | PingCheckInput | APICallInput | CDNCheckInput | BrowserTaskInput
 
 
 class TaskRequest(BaseModel):
@@ -471,7 +478,6 @@ class SettlementRecord(BaseModel):
     token_address: str
     network: str = "base-sepolia"
     status: SettlementStatus = SettlementStatus.PENDING
-    keeperhub_run_id: str | None = None
     tx_hash: str | None = None
     failure_reason: str | None = None
     created_at: datetime

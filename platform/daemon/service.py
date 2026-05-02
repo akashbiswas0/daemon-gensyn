@@ -20,7 +20,6 @@ from daemon.agents import (
     WorkerDiagnosisAgent,
 )
 from daemon.identity import LocalIdentity
-from daemon.keeperhub_client import KeeperHubClient
 from daemon.state import LocalEventStore
 from shared.config import PlatformSettings, get_settings
 from shared.contracts import (
@@ -90,25 +89,19 @@ class ImportAttestationsPayload(BaseModel):
 
 
 class DaemonRuntime:
-    def __init__(self, settings: PlatformSettings, *, keeperhub_client: KeeperHubClient | None = None) -> None:
+    def __init__(self, settings: PlatformSettings) -> None:
         self.settings = settings
         self.store = LocalEventStore(settings.daemon_state_dir)
-        self.registry = get_task_registry()
+        self.registry = get_task_registry(
+            node_nexus_agent_enabled=self.settings.node_nexus_agent_enabled,
+            node_nexus_agent_url=self.settings.node_nexus_agent_url,
+        )
         self.peer_id = ""
         self.identity: LocalIdentity | None = None
         self.reconcile_task: asyncio.Task[None] | None = None
         self.model_client = OpenAIModelClient(
             api_key=self.settings.openai_api_key,
             model=self.settings.openai_model,
-        )
-        self.keeperhub_client = keeperhub_client or KeeperHubClient(
-            enabled=self.settings.keeperhub_enabled,
-            api_key=self.settings.keeperhub_api_key,
-            base_url=self.settings.keeperhub_base_url,
-            workflow_id=self.settings.keeperhub_workflow_id,
-            trigger_url=self.settings.keeperhub_trigger_url,
-            network=self.settings.keeperhub_network,
-            token_address=self.settings.keeperhub_token_address,
         )
         self.planner = RequesterPlannerAgent(
             model_client=self.model_client,
@@ -212,6 +205,8 @@ class DaemonRuntime:
             return self.settings.worker_price_api_call
         if capability_name == CapabilityName.CDN_CHECK:
             return self.settings.worker_price_cdn_check
+        if capability_name == CapabilityName.BROWSER_TASK:
+            return self.settings.worker_price_browser_task
         return 0.0
 
     def public_wallet_address(self) -> str:
@@ -349,8 +344,6 @@ class DaemonRuntime:
             self.store.append(self.sign_event("attestation", attestation.model_dump(mode="json")))
 
     def payment_mode(self) -> str:
-        if self.keeperhub_client.enabled:
-            return "keeperhub-base-sepolia"
         if self.settings.daemon_enable_worker and self.settings.worker_payout_wallet:
             return "requester-settled usdc"
         return "payment-disabled demo mode"
@@ -414,8 +407,8 @@ class DaemonRuntime:
             capability_name=receipt.result.task_type,
             amount=float(amount),
             currency=receipt.payment.currency or "USDC",
-            token_address=self.settings.keeperhub_token_address,
-            network=self.settings.keeperhub_network,
+            token_address=self.settings.settlement_token_address,
+            network=self.settings.settlement_network,
             status=SettlementStatus.PENDING,
             created_at=now,
             updated_at=now,
@@ -442,75 +435,21 @@ class DaemonRuntime:
             capability_name=receipt.result.task_type,
             amount=float(amount),
             currency=verification_request.execution_request.payment.currency or "USDC",
-            token_address=self.settings.keeperhub_token_address,
-            network=self.settings.keeperhub_network,
+            token_address=self.settings.settlement_token_address,
+            network=self.settings.settlement_network,
             status=SettlementStatus.PENDING,
             created_at=now,
             updated_at=now,
         )
 
     async def request_settlement(self, settlement: SettlementRecord | None) -> SettlementRecord | None:
-        if settlement is None or not self.keeperhub_client.enabled:
-            return settlement
+        if settlement is None:
+            return None
         existing = self.store.settlement_by_receipt(settlement.receipt_id)
         if existing is not None:
             return SettlementRecord.model_validate(existing)
         self.store_settlement(settlement)
-        try:
-            return await self.trigger_keeperhub_payout(settlement)
-        except Exception as exc:
-            failed = settlement.model_copy(
-                update={
-                    "status": SettlementStatus.FAILED,
-                    "failure_reason": str(exc),
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-            self.store_settlement(failed)
-            return failed
-
-    async def trigger_keeperhub_payout(self, settlement: SettlementRecord) -> SettlementRecord:
-        payload = await self.keeperhub_client.trigger_payout(settlement)
-        run_id = self.keeperhub_client.extract_run_id(payload)
-        status = self.keeperhub_client.extract_status(payload)
-        tx_hash = self.keeperhub_client.extract_tx_hash(payload)
-        updated = settlement.model_copy(
-            update={
-                "keeperhub_run_id": run_id,
-                "tx_hash": tx_hash,
-                "failure_reason": None,
-                "status": SettlementStatus.TRIGGERED,
-                "updated_at": datetime.now(UTC),
-            }
-        )
-        if self.keeperhub_client.is_terminal_success(status):
-            updated = updated.model_copy(
-                update={
-                    "status": SettlementStatus.CONFIRMED,
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-        elif self.keeperhub_client.is_terminal_failure(status):
-            updated = updated.model_copy(
-                update={
-                    "status": SettlementStatus.FAILED,
-                    "failure_reason": status or "keeperhub trigger failed",
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-        elif run_id is None and not self.keeperhub_client.uses_webhook_trigger:
-            updated = updated.model_copy(
-                update={
-                    "status": SettlementStatus.FAILED,
-                    "failure_reason": "keeperhub trigger did not return a run ID",
-                    "updated_at": datetime.now(UTC),
-                }
-            )
-        self.store_settlement(updated)
-        return updated
-
-    async def poll_keeperhub_run(self, run_id: str) -> dict[str, Any]:
-        return await self.keeperhub_client.poll_run(run_id)
+        return settlement
 
     @staticmethod
     def _address_topic(address: str) -> str:
@@ -639,7 +578,7 @@ class DaemonRuntime:
             settlement = SettlementRecord.model_validate(raw)
             if settlement.tx_hash or settlement.status == SettlementStatus.CONFIRMED:
                 continue
-            if settlement.status not in {SettlementStatus.TRIGGERED, SettlementStatus.PENDING} and not self._is_recoverable_keeperhub_poll_failure(settlement):
+            if settlement.status not in {SettlementStatus.TRIGGERED, SettlementStatus.PENDING, SettlementStatus.FAILED}:
                 continue
             key = (
                 settlement.network,
@@ -663,16 +602,7 @@ class DaemonRuntime:
                     )
                 )
 
-    def _is_recoverable_keeperhub_poll_failure(self, settlement: SettlementRecord) -> bool:
-        if settlement.status != SettlementStatus.FAILED or not settlement.keeperhub_run_id or not settlement.failure_reason:
-            return False
-        failure_reason = settlement.failure_reason.lower()
-        return "/api/runs/" in failure_reason and "404" in failure_reason
-
     async def reconcile_pending_settlements(self) -> None:
-        if not self.keeperhub_client.enabled:
-            return
-
         verification_requests: dict[str, VerificationRequest] = {}
         for envelope in self.store.envelopes_by_type("request_verification"):
             request = VerificationRequest.model_validate(envelope.payload)
@@ -696,88 +626,24 @@ class DaemonRuntime:
 
         for raw in self.store.settlements():
             settlement = SettlementRecord.model_validate(raw)
-            try:
-                if (
-                    settlement.network != self.settings.keeperhub_network
-                    and settlement.network in {"sepolia", "base-sepolia"}
-                ) or (
-                    settlement.network == self.settings.keeperhub_network
-                    and settlement.token_address != self.settings.keeperhub_token_address
-                    and settlement.network in {"sepolia", "base-sepolia"}
-                ):
-                    settlement = settlement.model_copy(
-                        update={
-                            "network": self.settings.keeperhub_network,
-                            "token_address": self.settings.keeperhub_token_address,
-                            "updated_at": datetime.now(UTC),
-                        }
-                    )
-                    self.store_settlement(settlement)
-                if settlement.status == SettlementStatus.CONFIRMED:
-                    continue
-                if self.keeperhub_client.uses_webhook_trigger:
-                    if self._is_recoverable_keeperhub_poll_failure(settlement):
-                        settlement = settlement.model_copy(
-                            update={
-                                "status": SettlementStatus.TRIGGERED,
-                                "failure_reason": None,
-                                "updated_at": datetime.now(UTC),
-                            }
-                        )
-                        self.store_settlement(settlement)
-                    if settlement.status in {SettlementStatus.PENDING, SettlementStatus.FAILED} and not settlement.keeperhub_run_id:
-                        await self.trigger_keeperhub_payout(settlement)
-                    continue
-                if settlement.keeperhub_run_id:
-                    payload = await self.poll_keeperhub_run(settlement.keeperhub_run_id)
-                    status = self.keeperhub_client.extract_status(payload)
-                    tx_hash = self.keeperhub_client.extract_tx_hash(payload)
-                    if self.keeperhub_client.is_terminal_success(status):
-                        self.store_settlement(
-                            settlement.model_copy(
-                                update={
-                                    "status": SettlementStatus.CONFIRMED,
-                                    "tx_hash": tx_hash or settlement.tx_hash,
-                                    "failure_reason": None,
-                                    "updated_at": datetime.now(UTC),
-                                }
-                            )
-                        )
-                    elif self.keeperhub_client.is_terminal_failure(status):
-                        self.store_settlement(
-                            settlement.model_copy(
-                                update={
-                                    "status": SettlementStatus.FAILED,
-                                    "tx_hash": tx_hash or settlement.tx_hash,
-                                    "failure_reason": status or "keeperhub run failed",
-                                    "updated_at": datetime.now(UTC),
-                                }
-                            )
-                        )
-                    elif tx_hash and tx_hash != settlement.tx_hash:
-                        self.store_settlement(
-                            settlement.model_copy(
-                                update={
-                                    "tx_hash": tx_hash,
-                                    "updated_at": datetime.now(UTC),
-                                }
-                            )
-                        )
-                elif settlement.status in {SettlementStatus.PENDING, SettlementStatus.FAILED}:
-                    await self.trigger_keeperhub_payout(settlement)
-            except Exception as exc:
-                if self.keeperhub_client.uses_webhook_trigger and settlement.keeperhub_run_id and "404" in str(exc):
-                    logger.warning("skipping undocumented KeeperHub run-status lookup for %s: %s", settlement.keeperhub_run_id, exc)
-                    continue
-                self.store_settlement(
-                    settlement.model_copy(
-                        update={
-                            "status": SettlementStatus.FAILED,
-                            "failure_reason": str(exc),
-                            "updated_at": datetime.now(UTC),
-                        }
-                    )
+            if settlement.status == SettlementStatus.CONFIRMED:
+                continue
+            if (
+                settlement.network != self.settings.settlement_network
+                and settlement.network in {"sepolia", "base-sepolia"}
+            ) or (
+                settlement.network == self.settings.settlement_network
+                and settlement.token_address != self.settings.settlement_token_address
+                and settlement.network in {"sepolia", "base-sepolia"}
+            ):
+                settlement = settlement.model_copy(
+                    update={
+                        "network": self.settings.settlement_network,
+                        "token_address": self.settings.settlement_token_address,
+                        "updated_at": datetime.now(UTC),
+                    }
                 )
+                self.store_settlement(settlement)
         await self.reconcile_settlements_from_chain()
 
     async def fetch_agent_card(self, peer_id: str) -> dict[str, Any]:
@@ -1593,7 +1459,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
                     await runtime.reconcile_pending_settlements()
                 except Exception:
                     pass
-                await asyncio.sleep(max(5, runtime.settings.keeperhub_reconcile_interval_seconds))
+                await asyncio.sleep(max(5, runtime.settings.settlement_reconcile_interval_seconds))
 
         advertise_task = asyncio.create_task(advertisement_loop())
         discovery_task = asyncio.create_task(discovery_loop())

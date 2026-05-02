@@ -6,7 +6,6 @@ const isBaseSepolia = (network: string) => network === "base-sepolia" || network
 const explorerTxUrl = (network: string, txHash: string) =>
   isBaseSepolia(network) ? `https://sepolia.basescan.org/tx/${txHash}` : "#";
 const networkLabel = (network: string) => (isBaseSepolia(network) ? "Base Sepolia" : network);
-const keeperhubRunUrl = (runId: string) => `https://app.keeperhub.com/runs/${runId}`;
 
 export default async function LedgerPage() {
   const attestations = await getAttestations().catch(() => []);
@@ -65,7 +64,7 @@ export default async function LedgerPage() {
         <div className="stack-header">
           <div>
             <div className="kicker">Settlement Rail</div>
-            <h3>KeeperHub payouts</h3>
+            <h3>Settlement records</h3>
           </div>
           {settlements.length > 0 && <span className="pill">{settlements.length}</span>}
         </div>
@@ -104,10 +103,6 @@ export default async function LedgerPage() {
                       {settlement.tx_hash ? (
                         <a href={explorerTxUrl(settlement.network, settlement.tx_hash)} target="_blank" rel="noreferrer">
                           {settlement.tx_hash.slice(0, 12)}...
-                        </a>
-                      ) : settlement.keeperhub_run_id ? (
-                        <a href={keeperhubRunUrl(settlement.keeperhub_run_id)} target="_blank" rel="noreferrer">
-                          Run {settlement.keeperhub_run_id.slice(0, 12)}...
                         </a>
                       ) : (
                         settlement.failure_reason ?? "Awaiting tx hash"

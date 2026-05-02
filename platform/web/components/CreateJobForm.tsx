@@ -16,6 +16,7 @@ export function CreateJobForm() {
   const [port, setPort] = useState("443");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [jsonBody, setJsonBody] = useState("");
+  const [browserTask, setBrowserTask] = useState("Find the page title and leave the browser on the evidence page.");
   const [regions, setRegions] = useState<string[]>([]);
   const [jobId, setJobId] = useState("");
   const [status, setStatus] = useState("");
@@ -52,6 +53,11 @@ export function CreateJobForm() {
       targetLabel: "Target URL",
       placeholder: "https://example.com",
       hint: "Live CDN header and cache inspection"
+    },
+    browser_task: {
+      targetLabel: "Start URL",
+      placeholder: "https://example.com",
+      hint: "Run the node-nexus-agent browser workflow on the selected worker"
     }
   } as const;
 
@@ -60,6 +66,8 @@ export function CreateJobForm() {
   const needsPort = taskType === "dns_check" || taskType === "latency_probe";
   const needsMethod = taskType === "http_check" || taskType === "api_call" || taskType === "cdn_check";
   const needsJsonBody = taskType === "api_call";
+  const needsBrowserTask = taskType === "browser_task";
+  const needsTimeout = taskType !== "browser_task";
 
   async function submit() {
     setIsSubmitting(true);
@@ -89,6 +97,8 @@ export function CreateJobForm() {
         timeout_seconds: Number(timeoutSeconds),
         ...(parsedBody !== undefined ? { json_body: parsedBody } : {})
       };
+    } else if (taskType === "browser_task") {
+      inputs = { url: target, task: browserTask, x402_sig: "demo-signature" };
     } else {
       inputs = { url: target, method: method === "GET" ? "GET" : "HEAD", timeout_seconds: Number(timeoutSeconds) };
     }
@@ -128,6 +138,7 @@ export function CreateJobForm() {
             <option value="ping_check">ping_check</option>
             <option value="api_call">api_call</option>
             <option value="cdn_check">cdn_check</option>
+            <option value="browser_task">browser_task</option>
           </select>
         </label>
         <div className="field">
@@ -174,15 +185,17 @@ export function CreateJobForm() {
             <input className="input" value={port} onChange={(event) => setPort(event.target.value)} placeholder="443" />
           </label>
         ) : null}
-        <label className="field">
-          <span>Timeout</span>
-          <input
-            className="input"
-            value={timeoutSeconds}
-            onChange={(event) => setTimeoutSeconds(event.target.value)}
-            placeholder={usesUrl ? "10" : "5"}
-          />
-        </label>
+        {needsTimeout ? (
+          <label className="field">
+            <span>Timeout</span>
+            <input
+              className="input"
+              value={timeoutSeconds}
+              onChange={(event) => setTimeoutSeconds(event.target.value)}
+              placeholder={usesUrl ? "10" : "5"}
+            />
+          </label>
+        ) : null}
       </div>
       {needsJsonBody ? (
         <label className="field">
@@ -193,6 +206,18 @@ export function CreateJobForm() {
             value={jsonBody}
             onChange={(event) => setJsonBody(event.target.value)}
             placeholder='{"hello":"world"}'
+          />
+        </label>
+      ) : null}
+      {needsBrowserTask ? (
+        <label className="field">
+          <span>Browser task</span>
+          <textarea
+            className="input"
+            rows={5}
+            value={browserTask}
+            onChange={(event) => setBrowserTask(event.target.value)}
+            placeholder="Find the page title and leave the browser on the evidence page."
           />
         </label>
       ) : null}

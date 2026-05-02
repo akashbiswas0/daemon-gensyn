@@ -11,6 +11,11 @@ STATE_DIR="$RUNTIME_DIR/worker-state"
 NODE_CONFIG_PATH="$RUNTIME_DIR/worker-node.json"
 NODE_KEY_PATH="$RUNTIME_DIR/worker-node.pem"
 SIGNING_KEY_PATH="$RUNTIME_DIR/worker-signing-wallet.key"
+NEXUS_DIR="$ROOT/node-nexus-agent"
+NEXUS_VENV_DIR="$NEXUS_DIR/python-agent/venv"
+NEXUS_ENV_FILE="$NEXUS_DIR/.env"
+NEXUS_PORT="8080"
+NEXUS_URL="http://127.0.0.1:${NEXUS_PORT}"
 LOG_PREFIX="operator-worker"
 
 LABEL=""
@@ -135,6 +140,52 @@ print(Account.create().key.hex())
 PY
 }
 
+setup_node_nexus_agent() {
+  require_cmd node
+  require_cmd npm
+
+  if [[ ! -d "$NEXUS_DIR" ]]; then
+    echo "node-nexus-agent directory not found at $NEXUS_DIR" >&2
+    exit 1
+  fi
+
+  log_step "Preparing node-nexus-agent dependencies."
+
+  if [[ ! -d "$NEXUS_DIR/node_modules" ]]; then
+    (cd "$NEXUS_DIR" && npm install --no-fund --no-audit)
+  else
+    log_step "Reusing existing node-nexus-agent node_modules."
+  fi
+
+  if [[ ! -f "$NEXUS_ENV_FILE" && -f "$NEXUS_DIR/.env.example" ]]; then
+    cp "$NEXUS_DIR/.env.example" "$NEXUS_ENV_FILE"
+    log_step "Created node-nexus-agent/.env from .env.example. Fill in real 0G credentials before running browser tasks."
+  fi
+
+  if [[ -f "$NEXUS_ENV_FILE" ]] && grep -q 'your_0g_' "$NEXUS_ENV_FILE"; then
+    log_step "node-nexus-agent/.env still contains placeholder 0G values. Browser tasks will fail until you replace them."
+  fi
+
+  if [[ ! -d "$NEXUS_VENV_DIR" ]]; then
+    log_step "Creating node-nexus-agent Python virtual environment."
+    python3 -m venv "$NEXUS_VENV_DIR"
+  fi
+
+  local nexus_python
+  nexus_python="$NEXUS_VENV_DIR/bin/python3"
+
+  log_step "Installing node-nexus-agent Python dependencies."
+  "$nexus_python" -m pip install --disable-pip-version-check -r "$NEXUS_DIR/python-agent/requirements.txt"
+
+  if [[ ! -f "$NEXUS_VENV_DIR/.playwright-ready" ]]; then
+    log_step "Installing Playwright Chromium for node-nexus-agent."
+    "$nexus_python" -m playwright install chromium
+    touch "$NEXUS_VENV_DIR/.playwright-ready"
+  else
+    log_step "Reusing existing Playwright Chromium install for node-nexus-agent."
+  fi
+}
+
 write_node_config() {
   cat >"$NODE_CONFIG_PATH" <<EOF
 {
@@ -241,7 +292,7 @@ if [[ "$SEED_PEER" == *"YOUR_BOOTSTRAP_HOST"* ]]; then
 fi
 
 IFS=, read -r -a raw_capabilities <<<"$CAPABILITIES"
-VALID_CAPABILITIES=(http_check dns_check latency_probe ping_check api_call cdn_check)
+VALID_CAPABILITIES=(http_check dns_check latency_probe ping_check api_call cdn_check browser_task)
 CANONICAL_CAPABILITIES=()
 for item in "${raw_capabilities[@]}"; do
   trimmed="$(echo "$item" | xargs)"
@@ -257,6 +308,14 @@ for item in "${raw_capabilities[@]}"; do
   if [[ "$valid" != "true" ]]; then
     echo "Unsupported capability: $trimmed" >&2
     exit 1
+  fi
+done
+
+ENABLE_NEXUS_AGENT="false"
+for capability in "${CANONICAL_CAPABILITIES[@]}"; do
+  if [[ "$capability" == "browser_task" ]]; then
+    ENABLE_NEXUS_AGENT="true"
+    break
   fi
 done
 
@@ -297,6 +356,10 @@ for port in 9005 9006 8110 9101; do
   ensure_port_free "$port"
 done
 
+if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+  ensure_port_free "$NEXUS_PORT"
+fi
+
 if [[ ! -x "$ROOT/node" ]]; then
   log_step "Building the AXL node binary."
   (cd "$ROOT" && make build)
@@ -312,6 +375,10 @@ fi
 log_step "Installing Python dependencies for the worker runtime."
 source "$VENV_DIR/bin/activate"
 python -m pip install --disable-pip-version-check -e "$ROOT/platform" -e "$ROOT/integrations"
+
+if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+  setup_node_nexus_agent
+fi
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$STATE_DIR"
 : >"$PID_FILE"
@@ -335,6 +402,8 @@ LOWER_PAYOUT_WALLET="$(printf '%s' "$PAYOUT_WALLET" | tr '[:upper:]' '[:lower:]'
 
 write_env_line "NODEHUB_WORKER_PAYOUT_WALLET" "$LOWER_PAYOUT_WALLET"
 write_env_line "NODEHUB_WORKER_ENABLED_CAPABILITIES" "$(IFS=,; echo "${CANONICAL_CAPABILITIES[*]}")"
+write_env_line "NODEHUB_NODE_NEXUS_AGENT_ENABLED" "$ENABLE_NEXUS_AGENT"
+write_env_line "NODEHUB_NODE_NEXUS_AGENT_URL" "$NEXUS_URL"
 write_env_line "NODEHUB_AGENTIC_ENABLED" "true"
 write_env_line "NODEHUB_OPENAI_API_KEY" "$OPENAI_KEY"
 
@@ -344,6 +413,16 @@ wait_for_http "http://127.0.0.1:9005/topology"
 start_process "${LOG_PREFIX}-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9006"
 log_step "Starting MCP router."
 wait_for_http "http://127.0.0.1:9006/health"
+
+if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+  start_process "${LOG_PREFIX}-nexus" "cd '$NEXUS_DIR' && node src/server.js"
+  log_step "Starting node-nexus-agent browser orchestrator."
+  if ! wait_for_http "${NEXUS_URL}/health"; then
+    print_log_tail "Node Nexus log" "$LOG_DIR/${LOG_PREFIX}-nexus.log"
+    exit 1
+  fi
+fi
+
 start_process "${LOG_PREFIX}-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && set -a && source '$WORKER_ENV_FILE' && set +a && PYTHONPATH=platform uvicorn daemon.app:app --host 127.0.0.1 --port 8110"
 log_step "Starting worker daemon."
 
@@ -351,6 +430,7 @@ log_step "Waiting for worker daemon health."
 if ! wait_for_http "http://127.0.0.1:8110/health"; then
   print_log_tail "Node log" "$LOG_DIR/${LOG_PREFIX}-node.log"
   print_log_tail "Router log" "$LOG_DIR/${LOG_PREFIX}-router.log"
+  print_log_tail "Node Nexus log" "$LOG_DIR/${LOG_PREFIX}-nexus.log"
   print_log_tail "Daemon log" "$LOG_DIR/${LOG_PREFIX}-daemon.log"
   exit 1
 fi
@@ -375,12 +455,15 @@ echo "Peer ID: $PEER_ID"
 echo "Payout wallet: $LOWER_PAYOUT_WALLET"
 echo "Daemon: http://127.0.0.1:8110"
 echo "AXL API: http://127.0.0.1:9005"
+if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+  echo "Node Nexus agent: ${NEXUS_URL}"
+fi
 echo "Logs: $LOG_DIR"
 echo ""
 echo "What success looks like:"
 echo "- Your worker appears in the requester dashboard /nodes page after discovery."
 echo "- Jobs routed to this peer return signed receipts under peer ID $PEER_ID."
-echo "- Future requester-side KeeperHub payouts target $LOWER_PAYOUT_WALLET."
+echo "- Future requester-side USDC payouts target $LOWER_PAYOUT_WALLET."
 echo ""
 echo "To stop this worker later:"
 echo "  $ROOT/platform/operator/stop_worker.sh"

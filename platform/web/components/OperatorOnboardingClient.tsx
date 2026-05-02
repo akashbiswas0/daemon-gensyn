@@ -19,6 +19,7 @@ const CAPABILITY_OPTIONS = [
   { id: "ping_check", label: "Ping checks" },
   { id: "api_call", label: "API calls" },
   { id: "cdn_check", label: "CDN inspection" },
+  { id: "browser_task", label: "0G browser tasks" },
 ];
 
 const DEFAULT_BOOTSTRAP_PEER =
@@ -27,24 +28,34 @@ const DEFAULT_REPO_URL =
   process.env.NEXT_PUBLIC_OPERATOR_REPO_URL ??
   "https://github.com/akashbiswas0/daemon-gensyn.git";
 const REGION_OPTIONS = [
-  { value: "", label: "Select region" },
-  { value: "london", label: "London" },
-  { value: "berlin", label: "Berlin" },
-  { value: "tokyo", label: "Tokyo" },
-  { value: "mumbai", label: "Mumbai" },
-  { value: "singapore", label: "Singapore" },
-  { value: "new-york", label: "New York" },
-  { value: "san-francisco", label: "San Francisco" },
+  { value: "", label: "Select region", countryCode: "" },
+  { value: "london", label: "London", countryCode: "GB" },
+  { value: "berlin", label: "Berlin", countryCode: "DE" },
+  { value: "tokyo", label: "Tokyo", countryCode: "JP" },
+  { value: "mumbai", label: "Mumbai", countryCode: "IN" },
+  { value: "singapore", label: "Singapore", countryCode: "SG" },
+  { value: "new-york", label: "New York", countryCode: "US" },
+  { value: "san-francisco", label: "San Francisco", countryCode: "US" },
 ];
-const COUNTRY_OPTIONS = [
-  { value: "", label: "Select country" },
-  { value: "GB", label: "United Kingdom (GB)" },
-  { value: "DE", label: "Germany (DE)" },
-  { value: "JP", label: "Japan (JP)" },
-  { value: "IN", label: "India (IN)" },
-  { value: "SG", label: "Singapore (SG)" },
-  { value: "US", label: "United States (US)" },
-];
+
+function countryLabel(countryCode: string) {
+  switch (countryCode) {
+    case "GB":
+      return "United Kingdom (GB)";
+    case "DE":
+      return "Germany (DE)";
+    case "JP":
+      return "Japan (JP)";
+    case "IN":
+      return "India (IN)";
+    case "SG":
+      return "Singapore (SG)";
+    case "US":
+      return "United States (US)";
+    default:
+      return "Auto-filled from region";
+  }
+}
 
 function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
@@ -62,6 +73,7 @@ export function OperatorOnboardingClient() {
     openAiEnabled: true,
     capabilities: ["http_check", "dns_check", "ping_check", "api_call"],
   });
+  const selectedRegion = REGION_OPTIONS.find((option) => option.value === form.region);
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -154,6 +166,10 @@ export function OperatorOnboardingClient() {
             Prerequisites on the operator laptop: Python 3, `make`, and a browser wallet. On macOS,
             the bootstrap script can install Go automatically if Homebrew is already installed.
           </p>
+          <p className="muted">
+            If you enable <code>browser_task</code>, the laptop also needs Node/npm and valid 0G credentials in
+            <code>node-nexus-agent/.env</code>.
+          </p>
           <div className="row">
             <button type="button" className="button" onClick={connectWallet}>
               {walletAddress ? "Reconnect wallet" : "Connect wallet"}
@@ -189,7 +205,14 @@ export function OperatorOnboardingClient() {
               <select
                 className="input"
                 value={form.region}
-                onChange={(event) => setForm((current) => ({ ...current, region: event.target.value }))}
+                onChange={(event) => {
+                  const option = REGION_OPTIONS.find((item) => item.value === event.target.value);
+                  setForm((current) => ({
+                    ...current,
+                    region: event.target.value,
+                    countryCode: option?.countryCode ?? "",
+                  }));
+                }}
               >
                 {REGION_OPTIONS.map((option) => (
                   <option key={option.value || "blank"} value={option.value}>
@@ -200,17 +223,13 @@ export function OperatorOnboardingClient() {
             </label>
             <label className="field">
               <span>Country code</span>
-              <select
+              <input
                 className="input"
-                value={form.countryCode}
-                onChange={(event) => setForm((current) => ({ ...current, countryCode: event.target.value.toUpperCase() }))}
-              >
-                {COUNTRY_OPTIONS.map((option) => (
-                  <option key={option.value || "blank"} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                value={selectedRegion?.countryCode ?? ""}
+                readOnly
+                placeholder="Auto-filled from region"
+              />
+              <span className="muted">{countryLabel(selectedRegion?.countryCode ?? "")}</span>
             </label>
             <label className="field">
               <span>Bootstrap peer URI</span>

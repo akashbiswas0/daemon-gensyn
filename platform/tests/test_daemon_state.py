@@ -264,3 +264,20 @@ def test_worker_can_advertise_separate_payout_wallet_and_filtered_capabilities(t
     assert CapabilityName.HTTP_CHECK in capability_names
     assert CapabilityName.PING_CHECK in capability_names
     assert CapabilityName.DNS_CHECK not in capability_names
+
+
+def test_worker_can_advertise_browser_task_when_node_nexus_is_enabled(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path),
+            daemon_enable_worker=True,
+            node_nexus_agent_enabled=True,
+            worker_enabled_capabilities=["browser_task"],
+        )
+    )
+    identity = LocalIdentity.load(state_dir=str(tmp_path), peer_id="worker-peer")
+    runtime.peer_id = identity.peer_id
+    runtime.identity = identity
+
+    capability_names = [cap.name for cap in runtime.worker_capabilities()]
+    assert CapabilityName.BROWSER_TASK in capability_names

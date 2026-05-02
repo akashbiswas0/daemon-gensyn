@@ -30,7 +30,7 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-for port in 9005 9006 8110 9101; do
+for port in 8080 9005 9006 8110 9101; do
   cleanup_port "$port"
 done
 
