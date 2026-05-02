@@ -13,12 +13,6 @@ declare global {
 }
 
 const CAPABILITY_OPTIONS = [
-  { id: "http_check", label: "HTTP checks" },
-  { id: "dns_check", label: "DNS checks" },
-  { id: "latency_probe", label: "Latency probes" },
-  { id: "ping_check", label: "Ping checks" },
-  { id: "api_call", label: "API calls" },
-  { id: "cdn_check", label: "CDN inspection" },
   { id: "browser_task", label: "0G browser tasks" },
 ];
 
@@ -71,7 +65,7 @@ export function OperatorOnboardingClient() {
     countryCode: "",
     bootstrapPeer: DEFAULT_BOOTSTRAP_PEER,
     openAiEnabled: true,
-    capabilities: ["http_check", "dns_check", "ping_check", "api_call"],
+    capabilities: ["browser_task"],
   });
   const selectedRegion = REGION_OPTIONS.find((option) => option.value === form.region);
 

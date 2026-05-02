@@ -39,10 +39,6 @@ export async function getJobReport(jobId: string) {
   return fetchJson(`/reports/jobs/${jobId}`);
 }
 
-export async function getLeases() {
-  return fetchJson("/leases");
-}
-
 export async function getAttestations() {
   return fetchJson("/attestations");
 }
@@ -50,4 +46,3 @@ export async function getAttestations() {
 export async function getSettlements() {
   return fetchJson("/settlements");
 }
-

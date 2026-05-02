@@ -22,8 +22,8 @@ export default async function LandingPage() {
             <span className="hero-accent">signed end-to-end.</span>
           </h1>
           <p className="hero-sub">
-            Discover regional worker peers over AXL. Lease them with signed contracts.
-            Run MCP tasks. Keep every receipt in a daemon you control.
+            Discover active browser operators over AXL. Run 0G-backed browser tasks and keep every receipt
+            in a daemon you control.
           </p>
           <div className="hero-actions">
             <Link href="/dashboard" className="btn btn-primary">
@@ -68,15 +68,15 @@ export default async function LandingPage() {
           </article>
           <article className="feature">
             <div className="feature-num">02</div>
-            <h3>Leasing</h3>
-            <p>Lock a worker with a signed lease contract. Settle on completion — no upfront escrow, no trusted broker in the path.</p>
-            <div className="feature-tag">On-chain settlement</div>
+            <h3>Operator routing</h3>
+            <p>Target a live operator by declared region and capability. Every execution request stays signed and peer-to-peer.</p>
+            <div className="feature-tag">Wallet-bound workers</div>
           </article>
           <article className="feature">
             <div className="feature-num">03</div>
-            <h3>Global Checks</h3>
-            <p>Run live pings, API calls, DNS lookups, latency probes, and CDN inspection from regional workers without routing through a broker.</p>
-            <div className="feature-tag">MCP-native</div>
+            <h3>Browser Tasks</h3>
+            <p>Run node-nexus-agent browser workflows with 0G-backed proofs from remote operator laptops.</p>
+            <div className="feature-tag">0G integrated</div>
           </article>
         </div>
       </section>
@@ -98,8 +98,8 @@ export default async function LandingPage() {
           <li>
             <span className="step-num">2</span>
             <div>
-              <h4>Plan and negotiate</h4>
-              <p>Select peers, sign the request, lock a lease.</p>
+              <h4>Plan and route</h4>
+              <p>Select an active browser worker and sign the request.</p>
             </div>
           </li>
           <li>
@@ -137,7 +137,7 @@ export default async function LandingPage() {
         <article className="split-card">
           <div className="kicker">For Requesters</div>
           <h3>Submit jobs. Inspect signed results.</h3>
-          <p>Target regions, attach MCP tool definitions, and watch outputs return with full provenance.</p>
+          <p>Target regions, submit browser tasks, and watch outputs return with full provenance.</p>
           <Link href="/dashboard" className="btn btn-link">Try the dashboard →</Link>
         </article>
       </section>

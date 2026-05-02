@@ -67,6 +67,7 @@ class JSONRPCRequest(BaseModel):
 
 class DiscoverRequest(BaseModel):
     peer_ids: list[str] = Field(default_factory=list)
+    depth: int = 1
 
 
 class LeaseRequestPayload(BaseModel):
@@ -175,9 +176,7 @@ class DaemonRuntime:
         if not self.settings.daemon_enable_worker:
             return []
         enabled_capabilities = self.enabled_worker_capability_names()
-        capabilities = [
-            NodeCapability(name=CapabilityName.DESCRIBE_NODE, description="Describe this node.", price_per_invocation=0.0),
-        ]
+        capabilities: list[NodeCapability] = []
         capabilities.extend(
             NodeCapability(
                 name=plugin.name,
@@ -187,24 +186,9 @@ class DaemonRuntime:
             for plugin in self.registry.all()
             if plugin.name in enabled_capabilities
         )
-        capabilities.append(
-            NodeCapability(name=CapabilityName.DIAGNOSE_FAILURE, description="Run bounded failure diagnosis.", price_per_invocation=0.0)
-        )
         return capabilities
 
     def capability_price(self, capability_name: CapabilityName) -> float:
-        if capability_name == CapabilityName.HTTP_CHECK:
-            return self.settings.worker_price_http_check
-        if capability_name == CapabilityName.DNS_CHECK:
-            return self.settings.worker_price_dns_check
-        if capability_name == CapabilityName.LATENCY_PROBE:
-            return self.settings.worker_price_latency_probe
-        if capability_name == CapabilityName.PING_CHECK:
-            return self.settings.worker_price_ping_check
-        if capability_name == CapabilityName.API_CALL:
-            return self.settings.worker_price_api_call
-        if capability_name == CapabilityName.CDN_CHECK:
-            return self.settings.worker_price_cdn_check
         if capability_name == CapabilityName.BROWSER_TASK:
             return self.settings.worker_price_browser_task
         return 0.0
@@ -730,6 +714,23 @@ class DaemonRuntime:
             fallback_tool_name="request_job_execution",
         )
 
+    async def publish_advertisement(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:
+        return await self.send_coordination_request(
+            peer_id,
+            "advertise_node",
+            {"envelope": envelope.model_dump(mode="json")},
+            fallback_tool_name="advertise_node",
+        )
+
+    async def announce_current_advertisement(self) -> None:
+        envelope = self.current_advertisement_envelope()
+        self.store.append(envelope)
+        for peer_id in await self.seed_peer_ids([]):
+            try:
+                await self.publish_advertisement(peer_id, envelope)
+            except Exception:
+                continue
+
     async def send_verification_request(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:
         return await self.send_coordination_request(
             peer_id,
@@ -1027,6 +1028,11 @@ class DaemonRuntime:
                         continue
             envelopes = [envelope.model_dump(mode="json") for envelope in self.store.latest_node_advertisement_envelopes()]
             return {"envelopes": envelopes}
+        if tool_name == "advertise_node":
+            envelope = SignedEnvelope.model_validate(arguments["envelope"])
+            self.verify_envelope(envelope)
+            self.store.append(envelope)
+            return {"stored": True}
         if tool_name == "request_quote":
             envelope = SignedEnvelope.model_validate(arguments["envelope"])
             result = await self.handle_quote_request(envelope)
@@ -1065,6 +1071,7 @@ class DaemonRuntime:
                 {"id": self.settings.nodehub_service_name, "name": "nodehub"},
                 {"id": self.settings.worker_service_name, "name": "webops-worker"},
                 {"id": "discover_nodes", "name": "discover_nodes"},
+                {"id": "advertise_node", "name": "advertise_node"},
                 {"id": "request_quote", "name": "request_quote"},
                 {"id": "propose_lease", "name": "propose_lease"},
                 {"id": "release_lease", "name": "release_lease"},
@@ -1075,7 +1082,7 @@ class DaemonRuntime:
             ],
         }
 
-    async def discover_remote_nodes(self, explicit_peers: list[str] | None = None) -> list[dict[str, Any]]:
+    async def discover_remote_nodes(self, explicit_peers: list[str] | None = None, depth: int = 1) -> list[dict[str, Any]]:
         self.store.append(self.current_advertisement_envelope())
         peer_ids = await self.seed_peer_ids(explicit_peers or [])
         for peer_id in peer_ids:
@@ -1086,7 +1093,7 @@ class DaemonRuntime:
                 result = await self.send_coordination_request(
                     peer_id,
                     "discover_nodes",
-                    {"depth": 0},
+                    {"depth": max(depth, 0)},
                     fallback_tool_name="discover_nodes",
                 )
                 envelopes = [SignedEnvelope.model_validate(item) for item in result.get("envelopes", [])]
@@ -1424,6 +1431,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
     advertise_task: asyncio.Task | None = None
     discovery_task: asyncio.Task | None = None
     settlement_task: asyncio.Task | None = None
+    announce_task: asyncio.Task | None = None
 
     app.add_middleware(
         CORSMiddleware,
@@ -1435,7 +1443,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
-        nonlocal advertise_task, discovery_task, settlement_task
+        nonlocal advertise_task, discovery_task, settlement_task, announce_task
         await runtime.startup()
 
         async def advertisement_loop() -> None:
@@ -1447,7 +1455,16 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
             await asyncio.sleep(2)
             while True:
                 try:
-                    await runtime.discover_remote_nodes([])
+                    await runtime.discover_remote_nodes([], depth=1)
+                except Exception:
+                    pass
+                await asyncio.sleep(45)
+
+        async def announce_loop() -> None:
+            await asyncio.sleep(4)
+            while True:
+                try:
+                    await runtime.announce_current_advertisement()
                 except Exception:
                     pass
                 await asyncio.sleep(45)
@@ -1463,6 +1480,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
 
         advertise_task = asyncio.create_task(advertisement_loop())
         discovery_task = asyncio.create_task(discovery_loop())
+        announce_task = asyncio.create_task(announce_loop())
         settlement_task = asyncio.create_task(settlement_loop())
 
     @app.on_event("shutdown")
@@ -1471,6 +1489,8 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
             advertise_task.cancel()
         if discovery_task is not None:
             discovery_task.cancel()
+        if announce_task is not None:
+            announce_task.cancel()
         if settlement_task is not None:
             settlement_task.cancel()
         if runtime.settings.daemon_enable_worker:
@@ -1507,19 +1527,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
 
     @app.post("/discover")
     async def discover(payload: DiscoverRequest) -> list[dict[str, Any]]:
-        return await runtime.discover_remote_nodes(payload.peer_ids)
-
-    @app.get("/leases")
-    async def list_leases() -> list[dict[str, Any]]:
-        return runtime.store.leases()
-
-    @app.post("/leases/request")
-    async def request_lease(payload: LeaseRequestPayload) -> dict[str, Any]:
-        return await runtime.request_lease(payload)
-
-    @app.post("/leases/{lease_id}/release")
-    async def release_lease(lease_id: str) -> dict[str, Any]:
-        return await runtime.release_lease(lease_id)
+        return await runtime.discover_remote_nodes(payload.peer_ids, depth=payload.depth)
 
     @app.get("/jobs")
     async def list_jobs() -> list[dict[str, Any]]:

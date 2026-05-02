@@ -16,7 +16,7 @@ const mono = IBM_Plex_Mono({
 
 export const metadata = {
   title: "NodeHub",
-  description: "Local-first dashboard for decentralized AXL-backed WebOps coordination."
+  description: "Local-first dashboard for decentralized AXL-backed browser-task coordination."
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

@@ -18,18 +18,18 @@ export default async function NodesPage() {
         <article className="surface-card">
           <div className="kicker">Capabilities</div>
           <h3>
-            {nodes.reduce(
+            {activeNodes.reduce(
               (total: number, node: any) => total + (node.capabilities?.length ?? 0),
               0,
             )}{" "}
             advertised tools
           </h3>
-          <p className="muted">Safe WebOps tools per worker.</p>
+          <p className="muted">Active browser-task tools per worker.</p>
         </article>
         <article className="surface-card">
-          <div className="kicker">Availability</div>
-          <h3>{nodes.length - activeNodes.length} inactive peers</h3>
-          <p className="muted">Based on the latest signed ad and TTL.</p>
+          <div className="kicker">Visibility</div>
+          <h3>{activeNodes.length} shown</h3>
+          <p className="muted">Inactive peers are hidden from the dashboard.</p>
         </article>
       </section>
 
@@ -51,18 +51,18 @@ export default async function NodesPage() {
             </tr>
           </thead>
           <tbody>
-            {nodes.map((node: any) => (
+            {activeNodes.map((node: any) => (
               <tr key={node.id}>
                 <td>
                   <div className="node-label">
                     <span
-                      className={`node-status-dot ${node.active ? "is-active" : "is-inactive"}`}
-                      title={node.active ? "Active" : "Inactive"}
-                      aria-label={node.active ? "Active" : "Inactive"}
+                      className="node-status-dot is-active"
+                      title="Active"
+                      aria-label="Active"
                     />
                     <strong>{node.label}</strong>
                   </div>
-                  <div className="muted">{node.active ? "Active" : "Inactive"}</div>
+                  <div className="muted">Active</div>
                 </td>
                 <td>
                   {node.region} / {node.country_code}

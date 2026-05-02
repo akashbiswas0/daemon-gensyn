@@ -9,19 +9,15 @@ import { IdentityBadge } from "./IdentityBadge";
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/jobs", label: "Jobs" },
-  { href: "/leases", label: "Leases" },
-  { href: "/activities", label: "Activities" },
   { href: "/nodes", label: "Nodes" },
   { href: "/ledger", label: "Ledger" },
 ];
 
 const PAGE_TITLES: Array<[RegExp, { title: string; subtitle: string }]> = [
-  [/^\/dashboard$/, { title: "Operator Overview", subtitle: "Discovery, leasing, and execution." }],
-  [/^\/jobs$/, { title: "Jobs", subtitle: "Run signed WebOps tasks." }],
+  [/^\/dashboard$/, { title: "Operator Overview", subtitle: "Active browser workers and execution." }],
+  [/^\/jobs$/, { title: "Jobs", subtitle: "Run signed browser tasks." }],
   [/^\/jobs\/[^/]+$/, { title: "Job Report", subtitle: "Signed receipts and outcomes." }],
-  [/^\/leases$/, { title: "Leases", subtitle: "Reserve worker capacity." }],
-  [/^\/activities$/, { title: "Activities", subtitle: "Recent jobs and leases." }],
-  [/^\/nodes$/, { title: "Discovered Nodes", subtitle: "Known worker peers." }],
+  [/^\/nodes$/, { title: "Discovered Nodes", subtitle: "Active browser workers only." }],
   [/^\/ledger$/, { title: "Trust Ledger", subtitle: "Signed attestations only." }],
   [/^\/earnings$/, { title: "Trust Ledger", subtitle: "Signed attestations only." }],
 ];

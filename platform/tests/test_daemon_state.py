@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import asyncio
 
 from daemon.service import DaemonRuntime
 from daemon.identity import LocalIdentity
@@ -249,7 +250,8 @@ def test_worker_can_advertise_separate_payout_wallet_and_filtered_capabilities(t
             daemon_state_dir=str(tmp_path),
             daemon_enable_worker=True,
             worker_payout_wallet="0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-            worker_enabled_capabilities=["http_check", "ping_check"],
+            node_nexus_agent_enabled=True,
+            worker_enabled_capabilities=["browser_task"],
         )
     )
     identity = LocalIdentity.load(state_dir=str(tmp_path), peer_id="worker-peer")
@@ -261,9 +263,7 @@ def test_worker_can_advertise_separate_payout_wallet_and_filtered_capabilities(t
     assert advertisement.wallet_address != identity.wallet_address
 
     capability_names = [cap.name for cap in runtime.worker_capabilities()]
-    assert CapabilityName.HTTP_CHECK in capability_names
-    assert CapabilityName.PING_CHECK in capability_names
-    assert CapabilityName.DNS_CHECK not in capability_names
+    assert capability_names == [CapabilityName.BROWSER_TASK]
 
 
 def test_worker_can_advertise_browser_task_when_node_nexus_is_enabled(tmp_path) -> None:
@@ -281,3 +281,66 @@ def test_worker_can_advertise_browser_task_when_node_nexus_is_enabled(tmp_path) 
 
     capability_names = [cap.name for cap in runtime.worker_capabilities()]
     assert CapabilityName.BROWSER_TASK in capability_names
+
+
+def test_announce_current_advertisement_pushes_to_seed_peers(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path),
+            daemon_enable_worker=True,
+            node_nexus_agent_enabled=True,
+            worker_enabled_capabilities=["browser_task"],
+        )
+    )
+    identity = LocalIdentity.load(state_dir=str(tmp_path), peer_id="worker-peer")
+    runtime.peer_id = identity.peer_id
+    runtime.identity = identity
+
+    published: list[tuple[str, str]] = []
+
+    async def fake_seed_peer_ids(_: list[str]) -> list[str]:
+        return ["peer-a", "peer-b"]
+
+    async def fake_publish(peer_id: str, envelope) -> dict[str, bool]:
+        published.append((peer_id, envelope.payload["peer_id"]))
+        return {"stored": True}
+
+    runtime.seed_peer_ids = fake_seed_peer_ids  # type: ignore[method-assign]
+    runtime.publish_advertisement = fake_publish  # type: ignore[method-assign]
+
+    asyncio.run(runtime.announce_current_advertisement())
+
+    assert published == [("peer-a", "worker-peer"), ("peer-b", "worker-peer")]
+    assert any(item["peer_id"] == "worker-peer" for item in runtime.store.known_nodes())
+
+
+def test_advertise_node_tool_imports_remote_advertisement(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path / "receiver"),
+            daemon_enable_worker=False,
+        )
+    )
+    receiver = LocalIdentity.load(state_dir=str(tmp_path / "receiver"), peer_id="receiver-peer")
+    sender = LocalIdentity.load(state_dir=str(tmp_path / "sender"), peer_id="sender-peer")
+    runtime.peer_id = receiver.peer_id
+    runtime.identity = receiver
+
+    advertisement = NodeAdvertisement(
+        peer_id=sender.peer_id,
+        wallet_address=sender.wallet_address,
+        label="Remote Worker",
+        region="new-york",
+        country_code="US",
+        capabilities=[NodeCapability(name=CapabilityName.HTTP_CHECK, description="http", price_per_invocation=0.25)],
+        max_concurrency=2,
+    )
+    envelope = sender.sign_envelope("node_advertisement", advertisement.model_dump(mode="json"))
+
+    result = asyncio.run(
+        runtime.handle_nodehub_tool_call("advertise_node", {"envelope": envelope.model_dump(mode="json")})
+    )
+
+    assert result == {"stored": True}
+    nodes = runtime.store.known_nodes()
+    assert any(node["peer_id"] == sender.peer_id and node["region"] == "new-york" for node in nodes)

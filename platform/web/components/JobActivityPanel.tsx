@@ -10,7 +10,6 @@ type JobSummary = {
   task_type: string;
   status: string;
   regions: string[];
-  lease_id?: string | null;
 };
 
 export function JobActivityPanel() {
@@ -73,7 +72,6 @@ export function JobActivityPanel() {
               </div>
               <div className="row" style={{ marginTop: 12 }}>
                 <Link className="button secondary" href={`/jobs/${job.id}`}>Open Report</Link>
-                {job.lease_id ? <span className="muted">Uses lease {job.lease_id.slice(0, 8)}...</span> : null}
               </div>
             </div>
           ))}

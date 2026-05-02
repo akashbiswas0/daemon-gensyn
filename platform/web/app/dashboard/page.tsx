@@ -2,36 +2,31 @@ import Link from "next/link";
 
 import { CopyableId } from "../../components/CopyableId";
 import { DaemonHealthPanel } from "../../components/DaemonHealthPanel";
-import { LeaseGantt } from "../../components/LeaseGantt";
 import { RegionHeatmap } from "../../components/RegionHeatmap";
-import { getIdentity, getJobs, getLeases, getNodes } from "../../lib/api";
+import { getIdentity, getJobs, getNodes } from "../../lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [identity, nodes, jobs, leases] = await Promise.all([
+  const [identity, nodes, jobs] = await Promise.all([
     getIdentity().catch(() => null),
     getNodes().catch(() => []),
     getJobs().catch(() => []),
-    getLeases().catch(() => []),
   ]);
   const activeNodes = nodes.filter((node: any) => node.active);
-  const activeLeases = leases.filter((lease: any) => lease.status === "active");
   const completedJobs = jobs.filter((job: any) => job.status === "completed");
 
   const regionSet = new Set<string>();
   for (const node of nodes) regionSet.add((node.region || "unknown").toLowerCase());
 
   const recentJobs = jobs.slice(0, 4);
-  const recentLeases = leases.slice(0, 4);
-
   return (
     <div className="dashboard-stack">
       <section className="dash-kpis">
         <div className="kpi">
-          <span className="kpi-label">Active nodes</span>
+          <span className="kpi-label">Active browser workers</span>
           <strong className="kpi-num">{activeNodes.length}</strong>
-          <span className="kpi-sub">of {nodes.length} known</span>
+          <span className="kpi-sub">live now</span>
         </div>
         <div className="kpi">
           <span className="kpi-label">Signed jobs</span>
@@ -39,9 +34,9 @@ export default async function DashboardPage() {
           <span className="kpi-sub">{completedJobs.length} completed</span>
         </div>
         <div className="kpi">
-          <span className="kpi-label">Active leases</span>
-          <strong className="kpi-num">{activeLeases.length}</strong>
-          <span className="kpi-sub">of {leases.length} total</span>
+          <span className="kpi-label">Execution mode</span>
+          <strong className="kpi-num">Browser</strong>
+          <span className="kpi-sub">0G-backed tasks only</span>
         </div>
         <div className="kpi">
           <span className="kpi-label">Regions</span>
@@ -80,8 +75,6 @@ export default async function DashboardPage() {
         <DaemonHealthPanel />
       </section>
 
-      <LeaseGantt />
-
       <section className="activity-grid">
         <article className="surface-card">
           <div className="stack-header">
@@ -116,37 +109,22 @@ export default async function DashboardPage() {
         </article>
 
         <article className="surface-card">
-          <div className="stack-header">
-            <div>
-              <div className="kicker">Recent</div>
-              <h3>Leases</h3>
+          <div className="kicker">Focus</div>
+          <h3>Browser-task network</h3>
+          <p className="muted">
+            Only active browser-task operators are shown and targeted. Lease negotiation and legacy WebOps probes have
+            been removed from the product surface.
+          </p>
+          <div className="stack" style={{ gap: 8 }}>
+            <div className="meta-row">
+              <span className="muted">Primary capability</span>
+              <strong>browser_task</strong>
             </div>
-            <Link className="button button-ghost button-small" href="/leases">
-              All leases →
-            </Link>
+            <div className="meta-row">
+              <span className="muted">Worker onboarding</span>
+              <strong>Wallet-bound local operators</strong>
+            </div>
           </div>
-          {recentLeases.length === 0 ? (
-            <p className="muted">No leases yet. Reserve capacity from the Leases page.</p>
-          ) : (
-            <ul className="activity-list">
-              {recentLeases.map((lease: any) => (
-                <li key={lease.id} className="activity-row">
-                  <div>
-                    <strong>{lease.filters?.regions?.join(", ") || "any region"}</strong>
-                    <div className="muted">
-                      {lease.accepted_peer_ids?.length ?? 0} peers
-                      {lease.lease_window?.ends_at
-                        ? ` · ends ${new Date(lease.lease_window.ends_at).toLocaleString()}`
-                        : ""}
-                    </div>
-                  </div>
-                  <span className={`status-pill status-${lease.status?.toLowerCase()}`}>
-                    {lease.status?.toLowerCase()}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
         </article>
       </section>
     </div>

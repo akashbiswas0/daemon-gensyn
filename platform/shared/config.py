@@ -39,12 +39,6 @@ class PlatformSettings(BaseSettings):
     worker_region: str = "unknown"
     worker_country_code: str = "XX"
     worker_capacity: int = 2
-    worker_price_http_check: float = 0.25
-    worker_price_dns_check: float = 0.15
-    worker_price_latency_probe: float = 0.15
-    worker_price_ping_check: float = 0.10
-    worker_price_api_call: float = 0.30
-    worker_price_cdn_check: float = 0.20
     worker_price_browser_task: float = 1.00
     node_nexus_agent_enabled: bool = False
     node_nexus_agent_url: str = "http://127.0.0.1:8080"
