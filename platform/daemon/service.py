@@ -78,6 +78,14 @@ class ImportAttestationsPayload(BaseModel):
     envelopes: list[SignedEnvelope]
 
 
+class DemoTransportMessage(BaseModel):
+    protocol: str = "nodehub-demo"
+    kind: str
+    request_id: str = Field(default_factory=lambda: str(uuid4()))
+    reply_to_peer_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class DaemonRuntime:
     def __init__(self, settings: PlatformSettings) -> None:
         self.settings = settings
@@ -109,6 +117,8 @@ class DaemonRuntime:
         )
         self._token_decimals_cache: dict[tuple[str, str], int] = {}
         self._block_timestamp_cache: dict[tuple[str, int], datetime] = {}
+        self._pending_demo_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._seen_discover_requests: set[str] = set()
 
     async def startup(self) -> None:
         self.peer_id = await self.get_peer_id()
@@ -136,13 +146,181 @@ class DaemonRuntime:
             response.raise_for_status()
             return response.json()
 
+    async def send_raw_message(self, peer_id: str, message: DemoTransportMessage) -> None:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.settings.axl_node_url}/send",
+                content=message.model_dump_json().encode("utf-8"),
+                headers={
+                    "X-Destination-Peer-Id": peer_id,
+                    "Content-Type": "application/octet-stream",
+                },
+            )
+            response.raise_for_status()
+
+    async def send_demo_request(
+        self,
+        peer_id: str,
+        *,
+        kind: str,
+        payload: dict[str, Any],
+        timeout: float = 60.0,
+    ) -> dict[str, Any]:
+        message = DemoTransportMessage(
+            kind=kind,
+            reply_to_peer_id=self.peer_id,
+            payload=payload,
+        )
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending_demo_requests[message.request_id] = future
+        try:
+            await self.send_raw_message(peer_id, message)
+            return await asyncio.wait_for(future, timeout=timeout)
+        finally:
+            self._pending_demo_requests.pop(message.request_id, None)
+
+    async def poll_recv_once(self) -> bool:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{self.settings.axl_node_url}/recv")
+        if response.status_code == 204:
+            return False
+        response.raise_for_status()
+        from_peer_id = response.headers.get("X-From-Peer-Id")
+        if not from_peer_id:
+            return False
+        try:
+            message = DemoTransportMessage.model_validate_json(response.content)
+        except Exception:
+            return True
+        if message.protocol != "nodehub-demo":
+            return True
+        await self.handle_demo_message(from_peer_id, message)
+        return True
+
+    async def recv_loop(self) -> None:
+        while True:
+            try:
+                handled = await self.poll_recv_once()
+            except Exception:
+                handled = False
+            if not handled:
+                await asyncio.sleep(0.5)
+
+    async def handle_demo_message(self, from_peer_id: str, message: DemoTransportMessage) -> None:
+        if message.kind == "discover_response":
+            envelopes = [SignedEnvelope.model_validate(item) for item in message.payload.get("envelopes", [])]
+            for envelope in envelopes:
+                self.verify_envelope(envelope)
+            self.store.import_many(envelopes)
+            return
+
+        if message.kind == "node_advertisement":
+            envelope = SignedEnvelope.model_validate(message.payload["envelope"])
+            await self.store_and_relay_advertisement(envelope, from_peer_id=from_peer_id)
+            return
+
+        if message.kind in {"execution_receipt", "verification_receipt", "attestation_ack", "fetch_receipt_response"}:
+            future = self._pending_demo_requests.get(message.request_id)
+            if future is not None and not future.done():
+                future.set_result(message.payload)
+            return
+
+        if message.kind == "discover_request":
+            if message.request_id in self._seen_discover_requests:
+                return
+            self._seen_discover_requests.add(message.request_id)
+            self.store.append(self.current_advertisement_envelope())
+            if message.reply_to_peer_id:
+                response = DemoTransportMessage(
+                    kind="discover_response",
+                    request_id=message.request_id,
+                    payload={
+                        "envelopes": [
+                            envelope.model_dump(mode="json")
+                            for envelope in self.store.latest_node_advertisement_envelopes()
+                        ]
+                    },
+                )
+                try:
+                    await self.send_raw_message(message.reply_to_peer_id, response)
+                except Exception:
+                    pass
+            depth = int(message.payload.get("depth", 0) or 0)
+            if depth > 1:
+                relay_peer_ids = [
+                    peer_id
+                    for peer_id in await self.seed_peer_ids([])
+                    if peer_id not in {self.peer_id, from_peer_id, message.reply_to_peer_id}
+                ]
+                forwarded = DemoTransportMessage(
+                    kind="discover_request",
+                    request_id=message.request_id,
+                    reply_to_peer_id=message.reply_to_peer_id,
+                    payload={"depth": depth - 1},
+                )
+                for peer_id in relay_peer_ids:
+                    try:
+                        await self.send_raw_message(peer_id, forwarded)
+                    except Exception:
+                        continue
+            return
+
+        if message.kind == "execution_request":
+            envelope = SignedEnvelope.model_validate(message.payload["envelope"])
+            result = await self.handle_execution_request(envelope, verification=False)
+            if message.reply_to_peer_id:
+                await self.send_raw_message(
+                    message.reply_to_peer_id,
+                    DemoTransportMessage(
+                        kind="execution_receipt",
+                        request_id=message.request_id,
+                        payload={"envelope": result.model_dump(mode="json")},
+                    ),
+                )
+            return
+
+        if message.kind == "verification_request":
+            envelope = SignedEnvelope.model_validate(message.payload["envelope"])
+            result = await self.handle_execution_request(envelope, verification=True)
+            if message.reply_to_peer_id:
+                await self.send_raw_message(
+                    message.reply_to_peer_id,
+                    DemoTransportMessage(
+                        kind="verification_receipt",
+                        request_id=message.request_id,
+                        payload={"envelope": result.model_dump(mode="json")},
+                    ),
+                )
+            return
+
+        if message.kind == "attestation":
+            envelope = SignedEnvelope.model_validate(message.payload["envelope"])
+            result = await self.handle_attestation(envelope)
+            if message.reply_to_peer_id:
+                await self.send_raw_message(
+                    message.reply_to_peer_id,
+                    DemoTransportMessage(
+                        kind="attestation_ack",
+                        request_id=message.request_id,
+                        payload={"envelope": result.model_dump(mode="json")},
+                    ),
+                )
+            return
+
+        if message.kind == "fetch_receipt_request" and message.reply_to_peer_id:
+            receipt = self.store.receipt_by_id(message.payload["receipt_id"]) or {}
+            await self.send_raw_message(
+                message.reply_to_peer_id,
+                DemoTransportMessage(
+                    kind="fetch_receipt_response",
+                    request_id=message.request_id,
+                    payload=receipt,
+                ),
+            )
+
     async def register_with_router(self) -> None:
         endpoint = f"http://{self.settings.daemon_host}:{self.settings.daemon_port}/mcp"
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{self.settings.router_url}/register",
-                json={"service": self.settings.nodehub_service_name, "endpoint": endpoint},
-            )
             await client.post(
                 f"{self.settings.router_url}/register",
                 json={"service": self.settings.worker_service_name, "endpoint": endpoint},
@@ -150,7 +328,7 @@ class DaemonRuntime:
 
     async def deregister_from_router(self) -> None:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            for service_name in (self.settings.nodehub_service_name, self.settings.worker_service_name):
+            for service_name in (self.settings.worker_service_name,):
                 try:
                     await client.delete(f"{self.settings.router_url}/register/{service_name}")
                 except Exception:
@@ -696,22 +874,22 @@ class DaemonRuntime:
         return await self.post_mcp_service(peer_id, self.settings.worker_service_name, payload)
 
     async def send_execution_request(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:
-        return await self.send_coordination_request(
+        return await self.send_demo_request(
             peer_id,
-            "request_job_execution",
-            {"envelope": envelope.model_dump(mode="json")},
-            fallback_tool_name="request_job_execution",
+            kind="execution_request",
+            payload={"envelope": envelope.model_dump(mode="json")},
         )
 
-    async def publish_advertisement(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:
-        return await self.send_coordination_request(
+    async def publish_advertisement(self, peer_id: str, envelope: SignedEnvelope) -> None:
+        await self.send_raw_message(
             peer_id,
-            "advertise_node",
-            {"envelope": envelope.model_dump(mode="json")},
-            fallback_tool_name="advertise_node",
+            DemoTransportMessage(
+                kind="node_advertisement",
+                payload={"envelope": envelope.model_dump(mode="json")},
+            ),
         )
 
-    async def store_and_relay_advertisement(self, envelope: SignedEnvelope) -> bool:
+    async def store_and_relay_advertisement(self, envelope: SignedEnvelope, *, from_peer_id: str | None = None) -> bool:
         self.verify_envelope(envelope)
         is_new = not self.store.has_event(envelope.event_id)
         self.store.append(envelope)
@@ -721,7 +899,7 @@ class DaemonRuntime:
         relay_peer_ids = [
             peer_id
             for peer_id in await self.seed_peer_ids([])
-            if peer_id not in {self.peer_id, envelope.signer_peer_id}
+            if peer_id not in {self.peer_id, envelope.signer_peer_id, from_peer_id}
         ]
         for peer_id in relay_peer_ids:
             try:
@@ -740,27 +918,24 @@ class DaemonRuntime:
                 continue
 
     async def send_verification_request(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:
-        return await self.send_coordination_request(
+        return await self.send_demo_request(
             peer_id,
-            "request_verification",
-            {"envelope": envelope.model_dump(mode="json")},
-            fallback_tool_name="request_verification",
+            kind="verification_request",
+            payload={"envelope": envelope.model_dump(mode="json")},
         )
 
     async def submit_attestation(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:
-        return await self.send_coordination_request(
+        return await self.send_demo_request(
             peer_id,
-            "submit_attestation",
-            {"envelope": envelope.model_dump(mode="json")},
-            fallback_tool_name="submit_attestation",
+            kind="attestation",
+            payload={"envelope": envelope.model_dump(mode="json")},
         )
 
     async def fetch_remote_receipt(self, peer_id: str, receipt_id: str) -> dict[str, Any]:
-        return await self.send_coordination_request(
+        return await self.send_demo_request(
             peer_id,
-            "fetch_receipt",
-            {"receipt_id": receipt_id},
-            fallback_tool_name="fetch_receipt",
+            kind="fetch_receipt_request",
+            payload={"receipt_id": receipt_id},
         )
 
     async def execute_local_task(
@@ -1059,27 +1234,32 @@ class DaemonRuntime:
         peer_ids = await self.seed_peer_ids(explicit_peers or [])
         for peer_id in peer_ids:
             try:
-                result = await self.send_coordination_request(
+                await self.send_raw_message(
                     peer_id,
-                    "discover_nodes",
-                    {"depth": max(depth, 0)},
-                    fallback_tool_name="discover_nodes",
+                    DemoTransportMessage(
+                        kind="discover_request",
+                        reply_to_peer_id=self.peer_id,
+                        payload={"depth": max(depth, 1)},
+                    ),
                 )
-                envelopes = [SignedEnvelope.model_validate(item) for item in result.get("envelopes", [])]
-                for envelope in envelopes:
-                    self.verify_envelope(envelope)
-                self.store.import_many(envelopes)
             except Exception:
                 continue
+        await asyncio.sleep(1.0 + max(depth - 1, 0) * 0.5)
         return await self.live_nodes()
 
     async def seed_peer_ids(self, explicit_peers: list[str]) -> list[str]:
         topology = await self.get_topology()
-        peer_ids = list(dict.fromkeys(explicit_peers + self.settings.daemon_peer_seeds + self._peer_ids_from_topology(topology) + [item["peer_id"] for item in self.store.known_nodes()]))
+        peer_ids = list(
+            dict.fromkeys(
+                explicit_peers
+                + self.settings.daemon_peer_seeds
+                + self._direct_peer_ids_from_topology(topology)
+            )
+        )
         return [peer_id for peer_id in peer_ids if peer_id and peer_id != self.peer_id]
 
     @staticmethod
-    def _peer_ids_from_topology(topology: dict[str, Any]) -> list[str]:
+    def _direct_peer_ids_from_topology(topology: dict[str, Any]) -> list[str]:
         items: list[str] = []
         for peer in topology.get("peers", []):
             if isinstance(peer, dict):
@@ -1088,38 +1268,43 @@ class DaemonRuntime:
                     items.append(value)
             elif isinstance(peer, str):
                 items.append(peer)
-        for node in topology.get("tree", []):
-            if isinstance(node, dict):
-                value = node.get("public_key") or node.get("peer_id") or node.get("key")
-                if value:
-                    items.append(value)
-            elif isinstance(node, str):
-                items.append(node)
         return items
 
     async def request_job(self, payload: JobRequestPayload) -> dict[str, Any]:
         job_id = str(uuid4())
         discovered_nodes = await self.discover_remote_nodes([])
-        try:
-            plan = await self.planner.plan(
-                job_id=job_id,
-                task_type=payload.task_type,
-                target_inputs=payload.inputs,
-                requested_regions=payload.regions,
-                discovered_nodes=discovered_nodes,
-                verifier_count=payload.verifier_count,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        requested_region = payload.regions[0].lower() if payload.regions else None
+        selected_workers = [
+            node
+            for node in discovered_nodes
+            if any(cap.get("name") == payload.task_type.value for cap in node.get("capabilities", []))
+            and (requested_region is None or str(node.get("region", "")).lower() == requested_region)
+        ]
+        if not selected_workers:
+            region_label = requested_region or "the selected region"
+            raise HTTPException(status_code=404, detail=f"No live {payload.task_type.value} worker found for {region_label}.")
+
+        selected_worker = selected_workers[0]
+        plan = JobPlan(
+            job_id=job_id,
+            task_type=payload.task_type,
+            requested_regions=[requested_region] if requested_region else [],
+            selected_primary_peer_ids=[selected_worker["peer_id"]],
+            selected_verifier_peer_ids=[],
+            use_lease_backed=False,
+            selected_lease_id=None,
+            rationale=f"Direct demo dispatch to {selected_worker['label']} in {selected_worker['region']}.",
+            verification_requested=False,
+            planner_mode="deterministic",
+        )
 
         self.store.append(self.sign_event("job_plan", plan.model_dump(mode="json")))
 
-        selected_workers = list(plan.selected_primary_peer_ids)
         receipt_ids: list[str] = []
         primary_receipts: list[ExecutionReceipt] = []
         primary_request: ExecutionRequest | None = None
         mirrored_diagnoses: list[DiagnosisSummary] = []
-        for worker_peer_id in selected_workers:
+        for worker_peer_id in plan.selected_primary_peer_ids:
             reservation_id = str(uuid4())
             request = ExecutionRequest(
                 job_id=job_id,
@@ -1131,7 +1316,7 @@ class DaemonRuntime:
                 task_type=payload.task_type,
                 inputs=payload.inputs,
                 role=ReservationRole.PRIMARY,
-                verification_policy=VerificationPolicy(verifier_count=payload.verifier_count),
+                verification_policy=VerificationPolicy(verifier_count=0),
                 payment=self.snapshot_payment_terms(
                     peer_id=worker_peer_id,
                     capability_name=payload.task_type,
@@ -1155,41 +1340,6 @@ class DaemonRuntime:
             await self.request_settlement(self.build_execution_settlement(receipt))
 
         verification_receipts: list[VerificationReceipt] = []
-        for worker_peer_id, receipt_id in zip(plan.selected_verifier_peer_ids, receipt_ids):
-            execution_request = ExecutionRequest(
-                job_id=job_id,
-                reservation_id=str(uuid4()),
-                lease_id=None,
-                requester_wallet=self.assert_identity().wallet_address,
-                requester_peer_id=self.peer_id,
-                worker_peer_id=worker_peer_id,
-                task_type=payload.task_type,
-                inputs=payload.inputs,
-                role=ReservationRole.VERIFIER,
-                verification_policy=VerificationPolicy(verifier_count=payload.verifier_count),
-                payment=self.snapshot_payment_terms(
-                    peer_id=worker_peer_id,
-                    capability_name=payload.task_type,
-                    discovered_nodes=discovered_nodes,
-                ),
-            )
-            verification_request = VerificationRequest(
-                verification_id=str(uuid4()),
-                execution_request=execution_request,
-                primary_receipt_id=receipt_id,
-            )
-            envelope = self.sign_event("request_verification", verification_request.model_dump(mode="json"))
-            self.store.append(envelope)
-            verification_result = await self.send_verification_request(worker_peer_id, envelope)
-            verification_envelope = SignedEnvelope.model_validate(verification_result["envelope"])
-            self.verify_envelope(verification_envelope)
-            self.store.append(verification_envelope)
-            verification_receipt = VerificationReceipt.model_validate(verification_envelope.payload)
-            verification_receipts.append(verification_receipt)
-            diagnosis_summary = self.mirror_diagnosis_event(verification_receipt.result)
-            if diagnosis_summary is not None:
-                mirrored_diagnoses.append(diagnosis_summary)
-            await self.request_settlement(self.build_verification_settlement(verification_receipt, verification_request))
 
         if primary_request is not None:
             report_summary = await self.reporter.summarize(
@@ -1204,16 +1354,6 @@ class DaemonRuntime:
 
         for receipt in primary_receipts:
             await self.store_attestation(self.make_execution_attestation(receipt))
-        primary_by_receipt_id = {receipt.receipt_id: receipt for receipt in primary_receipts}
-        for receipt in verification_receipts:
-            await self.store_attestation(
-                self.make_verification_attestation(
-                    receipt,
-                    primary_subject_peer_id=primary_by_receipt_id.get(receipt.primary_receipt_id).worker_peer_id
-                    if primary_by_receipt_id.get(receipt.primary_receipt_id)
-                    else None,
-                )
-            )
 
         report = self.store.job_report(job_id)
         if report is None:
@@ -1281,6 +1421,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
     discovery_task: asyncio.Task | None = None
     settlement_task: asyncio.Task | None = None
     announce_task: asyncio.Task | None = None
+    recv_task: asyncio.Task | None = None
 
     app.add_middleware(
         CORSMiddleware,
@@ -1292,7 +1433,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
-        nonlocal advertise_task, discovery_task, settlement_task, announce_task
+        nonlocal advertise_task, discovery_task, settlement_task, announce_task, recv_task
         await runtime.startup()
 
         async def advertisement_loop() -> None:
@@ -1331,6 +1472,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
         discovery_task = asyncio.create_task(discovery_loop())
         announce_task = asyncio.create_task(announce_loop())
         settlement_task = asyncio.create_task(settlement_loop())
+        recv_task = asyncio.create_task(runtime.recv_loop())
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
@@ -1342,6 +1484,8 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
             announce_task.cancel()
         if settlement_task is not None:
             settlement_task.cancel()
+        if recv_task is not None:
+            recv_task.cancel()
         if runtime.settings.daemon_enable_worker:
             await runtime.deregister_from_router()
 

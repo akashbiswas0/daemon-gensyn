@@ -3,8 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { RegionMultiSelect } from "./RegionMultiSelect";
-
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
 
 type RegionOption = {
@@ -19,13 +17,13 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
   const [method, setMethod] = useState("GET");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [browserTask, setBrowserTask] = useState("Find the page title and leave the browser on the evidence page.");
-  const [regions, setRegions] = useState<string[]>([]);
+  const [selectedRegion, setSelectedRegion] = useState("");
   const [status, setStatus] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function submit() {
-    if (regions.length === 0) {
-      setStatus("Pick at least one region with a live operator before dispatching.");
+    if (!selectedRegion) {
+      setStatus("Pick one live operator region before dispatching.");
       return;
     }
     setIsSubmitting(true);
@@ -39,8 +37,8 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
               task: browserTask,
               x402_sig: "demo-signature",
             },
-            regions,
-            verifier_count: 1,
+            regions: [selectedRegion],
+            verifier_count: 0,
           }
         : {
             task_type: "http_check",
@@ -49,8 +47,8 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
               method,
               timeout_seconds: Number(timeoutSeconds),
             },
-            regions,
-            verifier_count: 1,
+            regions: [selectedRegion],
+            verifier_count: 0,
           };
     const response = await fetch(`${API_BASE}/jobs/request`, {
       method: "POST",
@@ -81,7 +79,27 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
         </label>
         <div className="field">
           <span>Regions</span>
-          <RegionMultiSelect value={regions} onChange={setRegions} placeholder="Select regions" options={regionOptions} />
+          {regionOptions.length === 0 ? (
+            <div className="input muted">No live operator regions available yet.</div>
+          ) : (
+            <div className="region-toggle-grid">
+              {regionOptions.map((option) => {
+                const selected = selectedRegion === option.region;
+                return (
+                  <button
+                    key={option.region}
+                    type="button"
+                    className={`region-toggle${selected ? " selected" : ""}`}
+                    aria-pressed={selected}
+                    onClick={() => setSelectedRegion(option.region)}
+                  >
+                    <strong>{option.region}</strong>
+                    <span>{option.countryCode}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
       <label className="field">
@@ -127,8 +145,12 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
         <div className="muted">
           {taskType === "browser_task"
-            ? "0G browser tasks run only on active operator nodes with the browser runtime enabled."
-            : "HTTP checks run on the same live operator nodes for lightweight verification."}
+            ? selectedRegion
+              ? `0G browser task will run on the live ${selectedRegion} operator.`
+              : "Select one live operator region to run the 0G browser task."
+            : selectedRegion
+              ? `HTTP check will run on the live ${selectedRegion} operator.`
+              : "Select one live operator region to run the HTTP check."}
         </div>
         <button type="button" className="button" onClick={submit} disabled={isSubmitting}>
           {isSubmitting ? "Dispatching..." : taskType === "browser_task" ? "Run Browser Task" : "Run HTTP Check"}

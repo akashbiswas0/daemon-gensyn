@@ -679,6 +679,39 @@ p {
   gap: 12px;
 }
 
+.region-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.region-toggle {
+  text-align: left;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 252, 247, 0.82);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.region-toggle span {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.region-toggle.selected {
+  border-color: var(--accent);
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.region-toggle:hover {
+  transform: translateY(-1px);
+}
+
 .capability-tile {
   text-align: left;
   border: 1px solid var(--line-strong);

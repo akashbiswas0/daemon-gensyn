@@ -52,7 +52,7 @@ export function IdentityBadge({ initialIdentity = null }: { initialIdentity?: Id
       const response = await fetch(`${API_BASE}/discover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ peer_ids: [] }),
+        body: JSON.stringify({ peer_ids: [], depth: 2 }),
       });
       if (!response.ok) {
         throw new Error(`Discovery failed (${response.status})`);

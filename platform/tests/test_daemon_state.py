@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 import asyncio
 
-from daemon.service import DaemonRuntime
+from daemon.service import DaemonRuntime, DemoTransportMessage
 from daemon.identity import LocalIdentity
 from daemon.state import LocalEventStore
 from shared.config import PlatformSettings
@@ -23,6 +23,7 @@ from shared.contracts import (
     ReservationRole,
     SettlementRecord,
     SettlementStatus,
+    SignedEnvelope,
     TaskMeasurement,
     TaskResult,
     VerificationPolicy,
@@ -388,3 +389,229 @@ def test_advertise_node_tool_relays_new_remote_advertisement(tmp_path) -> None:
 
     assert result == {"stored": True}
     assert published == ["peer-a", "peer-b"]
+
+
+def test_seed_peer_ids_prefers_direct_topology_peers(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path),
+            daemon_enable_worker=False,
+        )
+    )
+    runtime.peer_id = "self-peer"
+
+    async def fake_topology() -> dict[str, object]:
+        return {
+            "peers": [{"public_key": "direct-peer"}],
+            "tree": [{"public_key": "tree-peer"}],
+        }
+
+    runtime.get_topology = fake_topology  # type: ignore[method-assign]
+
+    peer_ids = asyncio.run(runtime.seed_peer_ids([]))
+
+    assert peer_ids == ["direct-peer"]
+
+
+def test_demo_discover_response_imports_remote_advertisements(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path / "receiver"),
+            daemon_enable_worker=False,
+        )
+    )
+    receiver = LocalIdentity.load(state_dir=str(tmp_path / "receiver"), peer_id="receiver-peer")
+    sender = LocalIdentity.load(state_dir=str(tmp_path / "sender"), peer_id="sender-peer")
+    runtime.peer_id = receiver.peer_id
+    runtime.identity = receiver
+
+    advertisement = NodeAdvertisement(
+        peer_id=sender.peer_id,
+        wallet_address=sender.wallet_address,
+        label="Tokyo Worker",
+        region="tokyo",
+        country_code="JP",
+        capabilities=[NodeCapability(name=CapabilityName.HTTP_CHECK, description="http", price_per_invocation=0.25)],
+        max_concurrency=2,
+    )
+    envelope = sender.sign_envelope("node_advertisement", advertisement.model_dump(mode="json"))
+
+    asyncio.run(
+        runtime.handle_demo_message(
+            "direct-peer",
+            DemoTransportMessage(
+                kind="discover_response",
+                payload={"envelopes": [envelope.model_dump(mode="json")]},
+            ),
+        )
+    )
+
+    nodes = runtime.store.known_nodes()
+    assert any(node["peer_id"] == sender.peer_id and node["region"] == "tokyo" for node in nodes)
+
+
+def test_demo_execution_request_sends_receipt_back_over_raw_transport(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path / "worker"),
+            daemon_enable_worker=True,
+            worker_enabled_capabilities=["http_check"],
+        )
+    )
+    worker = LocalIdentity.load(state_dir=str(tmp_path / "worker"), peer_id="worker-peer")
+    requester = LocalIdentity.load(state_dir=str(tmp_path / "requester"), peer_id="customer-peer")
+    runtime.peer_id = worker.peer_id
+    runtime.identity = worker
+
+    async def fake_execute_local_task(*, task_type, arguments, job_id, reservation_id):
+        return TaskResult(
+            job_id=job_id,
+            reservation_id=reservation_id,
+            task_type=task_type,
+            node_peer_id=worker.peer_id,
+            node_region="tokyo",
+            success=True,
+            measurement=TaskMeasurement(status_code=200, response_time_ms=85.0),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+        )
+
+    sent_messages: list[tuple[str, DemoTransportMessage]] = []
+
+    async def fake_send_raw_message(peer_id: str, message: DemoTransportMessage) -> None:
+        sent_messages.append((peer_id, message))
+
+    runtime.execute_local_task = fake_execute_local_task  # type: ignore[method-assign]
+    runtime.send_raw_message = fake_send_raw_message  # type: ignore[method-assign]
+
+    request = ExecutionRequest(
+        job_id="job-raw-1",
+        reservation_id="res-raw-1",
+        lease_id=None,
+        requester_wallet=requester.wallet_address,
+        requester_peer_id=requester.peer_id,
+        worker_peer_id=worker.peer_id,
+        task_type=CapabilityName.HTTP_CHECK,
+        inputs={"url": "https://example.com", "method": "GET", "timeout_seconds": 10},
+        role=ReservationRole.PRIMARY,
+        verification_policy=VerificationPolicy(verifier_count=0),
+        payment=PaymentTerms(currency="USDC", payment_terms="demo"),
+    )
+    envelope: SignedEnvelope = requester.sign_envelope("execution_request", request.model_dump(mode="json"))
+
+    asyncio.run(
+        runtime.handle_demo_message(
+            requester.peer_id,
+            DemoTransportMessage(
+                kind="execution_request",
+                request_id="raw-request-1",
+                reply_to_peer_id=requester.peer_id,
+                payload={"envelope": envelope.model_dump(mode="json")},
+            ),
+        )
+    )
+
+    assert len(sent_messages) == 1
+    peer_id, message = sent_messages[0]
+    assert peer_id == requester.peer_id
+    assert message.kind == "execution_receipt"
+    receipt_envelope = SignedEnvelope.model_validate(message.payload["envelope"])
+    receipt = ExecutionReceipt.model_validate(receipt_envelope.payload)
+    assert receipt.job_id == "job-raw-1"
+    assert receipt.worker_peer_id == worker.peer_id
+
+
+def test_request_job_dispatches_directly_to_selected_region(tmp_path) -> None:
+    runtime = DaemonRuntime(
+        PlatformSettings(
+            daemon_state_dir=str(tmp_path / "customer"),
+            daemon_enable_worker=False,
+        )
+    )
+    customer = LocalIdentity.load(state_dir=str(tmp_path / "customer"), peer_id="customer-peer")
+    runtime.peer_id = customer.peer_id
+    runtime.identity = customer
+
+    async def fake_discover_remote_nodes(_: list[str] | None = None, depth: int = 1):
+        return [
+            {
+                "peer_id": "tokyo-peer",
+                "label": "Tokyo Worker",
+                "region": "tokyo",
+                "country_code": "JP",
+                "capabilities": [{"name": "browser_task", "price_per_invocation": 1.0}],
+                "active": True,
+            },
+            {
+                "peer_id": "berlin-peer",
+                "label": "Berlin Worker",
+                "region": "berlin",
+                "country_code": "DE",
+                "capabilities": [{"name": "browser_task", "price_per_invocation": 1.0}],
+                "active": True,
+            },
+        ]
+
+    sent_to: list[str] = []
+
+    async def fake_send_execution_request(peer_id: str, envelope: SignedEnvelope):
+        sent_to.append(peer_id)
+        receipt = ExecutionReceipt(
+            receipt_id="receipt-browser-1",
+            job_id=envelope.payload["job_id"],
+            requester_wallet=customer.wallet_address,
+            requester_peer_id=customer.peer_id,
+            worker_wallet="0xworker",
+            worker_peer_id=peer_id,
+            role=ReservationRole.PRIMARY,
+            result=TaskResult(
+                job_id=envelope.payload["job_id"],
+                reservation_id=envelope.payload["reservation_id"],
+                task_type=CapabilityName.BROWSER_TASK,
+                node_peer_id=peer_id,
+                node_region="tokyo",
+                success=True,
+                measurement=TaskMeasurement(resolved_url="https://example.com"),
+                started_at=datetime.now(UTC),
+                completed_at=datetime.now(UTC),
+                raw={"proof_hash": "0xproof"},
+            ),
+            payment=PaymentTerms(currency="USDC", payment_terms="demo"),
+        )
+        worker = LocalIdentity.load(state_dir=str(tmp_path / "worker"), peer_id=peer_id)
+        return {"envelope": worker.sign_envelope("execution_receipt", receipt.model_dump(mode="json")).model_dump(mode="json")}
+
+    class FakeReporter:
+        async def summarize(self, **_: object) -> ReportSummary:
+            return ReportSummary(
+                job_id=_["job_id"],  # type: ignore[index]
+                final_summary="Browser task completed on the Tokyo worker.",
+                confidence=0.82,
+                issue_scope="inconclusive",
+                verifier_summary=None,
+                report_labels=["browser_task"],
+                source="deterministic",
+            )
+
+    async def fake_store_attestation(_: Attestation) -> None:
+        return None
+
+    runtime.discover_remote_nodes = fake_discover_remote_nodes  # type: ignore[method-assign]
+    runtime.send_execution_request = fake_send_execution_request  # type: ignore[method-assign]
+    runtime.store_attestation = fake_store_attestation  # type: ignore[method-assign]
+    runtime.reporter = FakeReporter()  # type: ignore[assignment]
+
+    report = asyncio.run(
+        runtime.request_job(
+            type("Payload", (), {
+                "task_type": CapabilityName.BROWSER_TASK,
+                "inputs": {"url": "https://example.com", "task": "Read the title", "x402_sig": "demo-signature"},
+                "regions": ["tokyo"],
+                "verifier_count": 0,
+            })()
+        )
+    )
+
+    assert sent_to == ["tokyo-peer"]
+    assert report["results"][0]["node_region"] == "tokyo"
+    assert report["final_summary"] == "Browser task completed on the Tokyo worker."

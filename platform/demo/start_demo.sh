@@ -165,7 +165,7 @@ if [[ -f "$PID_FILE" ]]; then
   "$DEMO_DIR/stop_demo.sh" >/dev/null 2>&1 || true
 fi
 
-for port in 3000 8010 8110 8210 9002 9005 9006 9007 9015 9016 9017 9101; do
+for port in 3000 8010 9002 9101; do
   cleanup_port "$port"
 done
 
@@ -174,7 +174,7 @@ if [[ ! -d "$VENV_DIR" ]]; then
 fi
 
 source "$VENV_DIR/bin/activate"
-python -m pip install -e "$ROOT/platform[test]" -e "$ROOT/integrations[test]" >/dev/null
+python -m pip install --disable-pip-version-check -e "$ROOT/platform" -e "$ROOT/integrations" >/dev/null
 
 if [[ ! -d "$WEB_DIR/node_modules" ]]; then
   (cd "$WEB_DIR" && npm install >/dev/null)
@@ -183,47 +183,34 @@ fi
 mkdir -p "$RUNTIME_DIR"
 : >"$PID_FILE"
 rm -f "$TAIL_PID_FILE"
-rm -f "$RUNTIME_DIR"/worker-mumbai-node.json "$RUNTIME_DIR"/worker-mumbai.pem "$RUNTIME_DIR"/mumbai-wallet.key
 
-WORKER1_KEY="$RUNTIME_DIR/worker-berlin.pem"
-WORKER2_KEY="$RUNTIME_DIR/worker-tokyo.pem"
 CUSTOMER_KEY="$RUNTIME_DIR/customer.pem"
-[[ -f "$WORKER1_KEY" ]] || openssl genpkey -algorithm ed25519 -out "$WORKER1_KEY" >/dev/null 2>&1
-[[ -f "$WORKER2_KEY" ]] || openssl genpkey -algorithm ed25519 -out "$WORKER2_KEY" >/dev/null 2>&1
 [[ -f "$CUSTOMER_KEY" ]] || openssl genpkey -algorithm ed25519 -out "$CUSTOMER_KEY" >/dev/null 2>&1
 
 CUSTOMER_WALLET_KEY="$RUNTIME_DIR/customer-wallet.key"
-BERLIN_WALLET_KEY="$RUNTIME_DIR/berlin-wallet.key"
-TOKYO_WALLET_KEY="$RUNTIME_DIR/tokyo-wallet.key"
 ensure_evm_key "$CUSTOMER_WALLET_KEY"
-ensure_evm_key "$BERLIN_WALLET_KEY"
-ensure_evm_key "$TOKYO_WALLET_KEY"
 
-write_node_config "$RUNTIME_DIR/worker-berlin-node.json" "$WORKER1_KEY" 9005 '["tls://0.0.0.0:9101"]' '[]' "http://127.0.0.1" 9006 "http://127.0.0.1" 8110
-write_node_config "$RUNTIME_DIR/worker-tokyo-node.json" "$WORKER2_KEY" 9015 '[]' '["tls://127.0.0.1:9101"]' "http://127.0.0.1" 9016 "http://127.0.0.1" 8210
-write_node_config "$RUNTIME_DIR/customer-node.json" "$CUSTOMER_KEY" 9002 '[]' '["tls://127.0.0.1:9101"]' "" 9003 "http://127.0.0.1" 8010
+write_node_config \
+  "$RUNTIME_DIR/customer-node.json" \
+  "$CUSTOMER_KEY" \
+  9002 \
+  '["tls://0.0.0.0:9101"]' \
+  '[]' \
+  "" \
+  9003 \
+  "http://127.0.0.1" \
+  8010
 
-start_process "worker-berlin-node" "cd '$ROOT' && ./node -config '$RUNTIME_DIR/worker-berlin-node.json'"
-sleep 2
-start_process "worker-tokyo-node" "cd '$ROOT' && ./node -config '$RUNTIME_DIR/worker-tokyo-node.json'"
 start_process "customer-node" "cd '$ROOT' && ./node -config '$RUNTIME_DIR/customer-node.json'"
-
-start_process "worker-berlin-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9006"
-start_process "worker-tokyo-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9016"
 
 CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
 if [[ -n "$BOOTSTRAP_LAN_IP" ]]; then
   CORS_ORIGINS="$CORS_ORIGINS,http://$BOOTSTRAP_LAN_IP:3000"
 fi
+
 start_process "customer-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=0.0.0.0 NODEHUB_DAEMON_PORT=8010 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/customer-state' NODEHUB_DAEMON_ENABLE_WORKER=false NODEHUB_AXL_NODE_URL=http://127.0.0.1:9002 NODEHUB_WORKER_PUBLIC_LABEL='Customer Daemon' NODEHUB_WORKER_REGION='control' NODEHUB_WORKER_COUNTRY_CODE='IN' NODEHUB_WALLET_PRIVATE_KEY_PATH='$CUSTOMER_WALLET_KEY' NODEHUB_CORS_ALLOWED_ORIGINS='$CORS_ORIGINS' uvicorn daemon.app:app --host 0.0.0.0 --port 8010"
-start_process "worker-berlin-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=127.0.0.1 NODEHUB_DAEMON_PORT=8110 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/berlin-state' NODEHUB_DAEMON_ENABLE_WORKER=true NODEHUB_AXL_NODE_URL=http://127.0.0.1:9005 NODEHUB_ROUTER_URL=http://127.0.0.1:9006 NODEHUB_WORKER_PUBLIC_LABEL='Berlin Worker' NODEHUB_WORKER_REGION='berlin' NODEHUB_WORKER_COUNTRY_CODE='DE' NODEHUB_WALLET_PRIVATE_KEY_PATH='$BERLIN_WALLET_KEY' uvicorn daemon.app:app --host 127.0.0.1 --port 8110"
-start_process "worker-tokyo-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=127.0.0.1 NODEHUB_DAEMON_PORT=8210 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/tokyo-state' NODEHUB_DAEMON_ENABLE_WORKER=true NODEHUB_AXL_NODE_URL=http://127.0.0.1:9015 NODEHUB_ROUTER_URL=http://127.0.0.1:9016 NODEHUB_WORKER_PUBLIC_LABEL='Tokyo Worker' NODEHUB_WORKER_REGION='tokyo' NODEHUB_WORKER_COUNTRY_CODE='JP' NODEHUB_WALLET_PRIVATE_KEY_PATH='$TOKYO_WALLET_KEY' uvicorn daemon.app:app --host 127.0.0.1 --port 8210"
 
 wait_for_http "http://127.0.0.1:8010/health"
-wait_for_http "http://127.0.0.1:8110/health"
-wait_for_http "http://127.0.0.1:8210/health"
-wait_for_http "http://127.0.0.1:8110/.well-known/agent-card.json"
-wait_for_http "http://127.0.0.1:8210/.well-known/agent-card.json"
 
 DASHBOARD_API_BASE="http://127.0.0.1:8010"
 DASHBOARD_BIND_HOST="127.0.0.1"
@@ -235,7 +222,7 @@ start_process "dashboard" "cd '$WEB_DIR' && NEXT_PUBLIC_API_BASE_URL=$DASHBOARD_
 wait_for_http "http://127.0.0.1:3000"
 
 echo ""
-echo "NodeHub v2 demo is running."
+echo "NodeHub two-laptop demo is running."
 if [[ -n "$BOOTSTRAP_LAN_IP" ]]; then
   echo "Dashboard:        http://127.0.0.1:3000  (also reachable on LAN: http://$BOOTSTRAP_LAN_IP:3000)"
   echo "Customer daemon:  http://127.0.0.1:8010  (also reachable on LAN: http://$BOOTSTRAP_LAN_IP:8010)"
@@ -250,7 +237,7 @@ else
   echo "Remote operator seed peer: unavailable (could not detect LAN IP)"
 fi
 echo ""
-echo "Streaming live logs. Press Ctrl+C to stop the full demo."
+echo "Streaming live logs. Press Ctrl+C to stop the requester stack."
 echo ""
 trap stop_demo INT TERM
 
@@ -258,11 +245,5 @@ trap stop_demo INT TERM
 stream_log "WEB" $'\033[38;5;45m' "$LOG_DIR/dashboard.log" 'Starting|Ready|Compiled|Local:|Network:|WARN|Warning|ERROR|Error|Failed|Traceback'
 stream_log "CUSTOMER-DAEMON" $'\033[38;5;220m' "$LOG_DIR/customer-daemon.log" 'Started server process|Application startup complete|Uvicorn running|POST /|ERROR|Traceback|Exception'
 stream_log "CUSTOMER-NODE" $'\033[38;5;223m' "$LOG_DIR/customer-node.log"
-stream_log "BERLIN-DAEMON" $'\033[38;5;42m' "$LOG_DIR/worker-berlin-daemon.log" 'Started server process|Application startup complete|Uvicorn running|POST /|ERROR|Traceback|Exception'
-stream_log "BERLIN-NODE" $'\033[38;5;77m' "$LOG_DIR/worker-berlin-node.log"
-stream_log "BERLIN-ROUTER" $'\033[38;5;84m' "$LOG_DIR/worker-berlin-router.log" 'listening|Endpoints:|Registered service|POST /route|POST /register|ERROR|Traceback|Exception'
-stream_log "TOKYO-DAEMON" $'\033[38;5;208m' "$LOG_DIR/worker-tokyo-daemon.log" 'Started server process|Application startup complete|Uvicorn running|POST /|ERROR|Traceback|Exception'
-stream_log "TOKYO-NODE" $'\033[38;5;214m' "$LOG_DIR/worker-tokyo-node.log"
-stream_log "TOKYO-ROUTER" $'\033[38;5;215m' "$LOG_DIR/worker-tokyo-router.log" 'listening|Endpoints:|Registered service|POST /route|POST /register|ERROR|Traceback|Exception'
 
 wait
