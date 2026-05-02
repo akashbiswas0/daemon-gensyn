@@ -13,11 +13,14 @@ export default async function DashboardPage() {
     getNodes().catch(() => []),
     getJobs().catch(() => []),
   ]);
-  const activeNodes = nodes.filter((node: any) => node.active);
+  const liveNodes = nodes;
+  const browserNodes = liveNodes.filter((node: any) =>
+    (node.capabilities ?? []).some((cap: any) => cap?.name === "browser_task"),
+  );
   const completedJobs = jobs.filter((job: any) => job.status === "completed");
 
   const regionSet = new Set<string>();
-  for (const node of nodes) regionSet.add((node.region || "unknown").toLowerCase());
+  for (const node of liveNodes) regionSet.add((node.region || "unknown").toLowerCase());
 
   const recentJobs = jobs.slice(0, 4);
   return (
@@ -25,7 +28,7 @@ export default async function DashboardPage() {
       <section className="dash-kpis">
         <div className="kpi">
           <span className="kpi-label">Active browser workers</span>
-          <strong className="kpi-num">{activeNodes.length}</strong>
+          <strong className="kpi-num">{browserNodes.length}</strong>
           <span className="kpi-sub">live now</span>
         </div>
         <div className="kpi">

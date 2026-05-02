@@ -13,7 +13,8 @@ declare global {
 }
 
 const CAPABILITY_OPTIONS = [
-  { id: "browser_task", label: "0G browser tasks" },
+  { id: "browser_task", label: "0G browser tasks (primary)", required: true },
+  { id: "http_check", label: "HTTP checks (secondary)", required: false },
 ];
 
 const DEFAULT_BOOTSTRAP_PEER =
@@ -65,7 +66,7 @@ export function OperatorOnboardingClient() {
     countryCode: "",
     bootstrapPeer: DEFAULT_BOOTSTRAP_PEER,
     openAiEnabled: true,
-    capabilities: ["browser_task"],
+    capabilities: ["browser_task", "http_check"],
   });
   const selectedRegion = REGION_OPTIONS.find((option) => option.value === form.region);
 
@@ -107,11 +108,14 @@ export function OperatorOnboardingClient() {
 
   function toggleCapability(capabilityId: string) {
     setForm((current) => {
+      if (capabilityId === "browser_task") {
+        return current;
+      }
       const exists = current.capabilities.includes(capabilityId);
       const capabilities = exists
         ? current.capabilities.filter((item) => item !== capabilityId)
         : [...current.capabilities, capabilityId];
-      return { ...current, capabilities };
+      return { ...current, capabilities: ["browser_task", ...capabilities.filter((item) => item !== "browser_task")] };
     });
   }
 
@@ -161,8 +165,9 @@ export function OperatorOnboardingClient() {
             the bootstrap script can install Go automatically if Homebrew is already installed.
           </p>
           <p className="muted">
-            If you enable <code>browser_task</code>, the laptop also needs Node/npm and valid 0G credentials in
-            <code>node-nexus-agent/.env</code>.
+            The NodeHub worker runtime includes the browser runtime by default. <code>./OnboardWorker</code> prompts
+            for your 0G testnet API key and storage private key on first run and stores them inside the same worker
+            runtime config — there is no separate <code>node-nexus-agent/.env</code> contract to maintain.
           </p>
           <div className="row">
             <button type="button" className="button" onClick={connectWallet}>
@@ -247,6 +252,7 @@ export function OperatorOnboardingClient() {
                     type="button"
                     className={`capability-tile${selected ? " selected" : ""}`}
                     onClick={() => toggleCapability(capability.id)}
+                    disabled={capability.required}
                   >
                     <strong>{capability.label}</strong>
                     <span>{capability.id}</span>

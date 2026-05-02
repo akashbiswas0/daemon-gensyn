@@ -13,7 +13,6 @@ NODE_KEY_PATH="$RUNTIME_DIR/worker-node.pem"
 SIGNING_KEY_PATH="$RUNTIME_DIR/worker-signing-wallet.key"
 NEXUS_DIR="$ROOT/node-nexus-agent"
 NEXUS_VENV_DIR="$NEXUS_DIR/python-agent/venv"
-NEXUS_ENV_FILE="$NEXUS_DIR/.env"
 NEXUS_PORT="8080"
 NEXUS_URL="http://127.0.0.1:${NEXUS_PORT}"
 LOG_PREFIX="operator-worker"
@@ -26,6 +25,8 @@ CAPABILITIES=""
 SEED_PEER=""
 OPENAI_ENABLED="false"
 OPENAI_KEY="${NODEHUB_OPENAI_API_KEY:-}"
+ZEROG_API_KEY="${ZEROG_API_KEY:-}"
+ZEROG_PRIVATE_KEY="${ZEROG_PRIVATE_KEY:-}"
 PYTHON_BIN=""
 
 usage() {
@@ -36,9 +37,13 @@ Usage:
     --region london \
     --country GB \
     --payout-wallet 0x... \
-    --capabilities http_check,dns_check,ping_check \
+    --capabilities browser_task,http_check \
     --seed-peer tls://bootstrap.example.com:9101 \
     [--openai-enabled true|false]
+
+Capabilities:
+  browser_task   Primary capability. Runs 0G-backed browser workflows.
+  http_check     Optional secondary capability for lightweight HTTP probes.
 EOF
 }
 
@@ -222,49 +227,40 @@ PY
   fi
 }
 
-setup_node_nexus_agent() {
+setup_browser_runtime() {
   require_cmd node
   require_cmd npm
 
   if [[ ! -d "$NEXUS_DIR" ]]; then
-    echo "node-nexus-agent directory not found at $NEXUS_DIR" >&2
+    echo "Browser runtime sources not found at $NEXUS_DIR" >&2
     exit 1
   fi
 
-  log_step "Preparing node-nexus-agent dependencies."
+  log_step "Preparing NodeHub browser runtime dependencies."
 
   if [[ ! -d "$NEXUS_DIR/node_modules" ]]; then
     (cd "$NEXUS_DIR" && npm install --no-fund --no-audit)
   else
-    log_step "Reusing existing node-nexus-agent node_modules."
-  fi
-
-  if [[ ! -f "$NEXUS_ENV_FILE" && -f "$NEXUS_DIR/.env.example" ]]; then
-    cp "$NEXUS_DIR/.env.example" "$NEXUS_ENV_FILE"
-    log_step "Created node-nexus-agent/.env from .env.example. Fill in real 0G credentials before running browser tasks."
-  fi
-
-  if [[ -f "$NEXUS_ENV_FILE" ]] && grep -q 'your_0g_' "$NEXUS_ENV_FILE"; then
-    log_step "node-nexus-agent/.env still contains placeholder 0G values. Browser tasks will fail until you replace them."
+    log_step "Reusing existing browser runtime node_modules."
   fi
 
   if [[ ! -d "$NEXUS_VENV_DIR" ]]; then
-    log_step "Creating node-nexus-agent Python virtual environment."
+    log_step "Creating browser runtime Python virtual environment."
     "$PYTHON_BIN" -m venv "$NEXUS_VENV_DIR"
   fi
 
   local nexus_python
   nexus_python="$NEXUS_VENV_DIR/bin/python3"
 
-  log_step "Installing node-nexus-agent Python dependencies."
+  log_step "Installing browser runtime Python dependencies."
   "$nexus_python" -m pip install --disable-pip-version-check -r "$NEXUS_DIR/python-agent/requirements.txt"
 
   if [[ ! -f "$NEXUS_VENV_DIR/.playwright-ready" ]]; then
-    log_step "Installing Playwright Chromium for node-nexus-agent."
+    log_step "Installing Playwright Chromium for browser runtime."
     "$nexus_python" -m playwright install chromium
     touch "$NEXUS_VENV_DIR/.playwright-ready"
   else
-    log_step "Reusing existing Playwright Chromium install for node-nexus-agent."
+    log_step "Reusing existing Playwright Chromium install for browser runtime."
   fi
 }
 
@@ -337,6 +333,14 @@ while [[ $# -gt 0 ]]; do
       OPENAI_KEY="${2:-}"
       shift 2
       ;;
+    --zerog-api-key)
+      ZEROG_API_KEY="${2:-}"
+      shift 2
+      ;;
+    --zerog-private-key)
+      ZEROG_PRIVATE_KEY="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -374,7 +378,7 @@ if [[ "$SEED_PEER" == *"YOUR_BOOTSTRAP_HOST"* ]]; then
 fi
 
 IFS=, read -r -a raw_capabilities <<<"$CAPABILITIES"
-VALID_CAPABILITIES=(http_check dns_check latency_probe ping_check api_call cdn_check browser_task)
+VALID_CAPABILITIES=(browser_task http_check)
 CANONICAL_CAPABILITIES=()
 for item in "${raw_capabilities[@]}"; do
   trimmed="$(echo "$item" | xargs)"
@@ -406,6 +410,11 @@ if [[ ${#CANONICAL_CAPABILITIES[@]} -eq 0 ]]; then
   exit 1
 fi
 
+if [[ "$ENABLE_NEXUS_AGENT" != "true" ]]; then
+  echo "browser_task is the primary NodeHub capability and must be enabled." >&2
+  exit 1
+fi
+
 require_cmd curl
 require_cmd lsof
 require_cmd openssl
@@ -413,11 +422,13 @@ require_cmd make
 ensure_go
 ensure_python312
 
-if [[ "$OPENAI_ENABLED" == "true" && -z "$OPENAI_KEY" && -f "$WORKER_ENV_FILE" ]]; then
-  # Reuse a previously stored key if the operator already onboarded this worker.
+if [[ -f "$WORKER_ENV_FILE" ]]; then
+  # Reuse previously stored credentials if the operator already onboarded this worker.
   # shellcheck disable=SC1090
   source "$WORKER_ENV_FILE"
-  OPENAI_KEY="${NODEHUB_OPENAI_API_KEY:-}"
+  if [[ "$OPENAI_ENABLED" == "true" && -z "$OPENAI_KEY" ]]; then
+    OPENAI_KEY="${NODEHUB_OPENAI_API_KEY:-}"
+  fi
 fi
 
 if [[ "$OPENAI_ENABLED" == "true" && -z "$OPENAI_KEY" ]]; then
@@ -427,6 +438,14 @@ fi
 
 if [[ "$OPENAI_ENABLED" != "true" ]]; then
   OPENAI_KEY=""
+fi
+
+if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+  # Phase 1: bake-in shared 0G testnet credentials so onboarding "just works"
+  # without an interactive credential prompt. Phase 2 will replace this with
+  # per-operator credentials.
+  ZEROG_API_KEY="${ZEROG_API_KEY:-sk-26b61d91-e273-40cb-9bdb-189de164284f}"
+  ZEROG_PRIVATE_KEY="${ZEROG_PRIVATE_KEY:-8b29ae03676c478a17c99bcace68ea456b9a37e20db6269c551355537b18c775}"
 fi
 
 if [[ -f "$PID_FILE" ]]; then
@@ -460,7 +479,7 @@ python -m pip install --disable-pip-version-check -e "$ROOT/platform" -e "$ROOT/
 verify_runtime_python_deps
 
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
-  setup_node_nexus_agent
+  setup_browser_runtime
 fi
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$STATE_DIR"
@@ -490,6 +509,25 @@ write_env_line "NODEHUB_NODE_NEXUS_AGENT_URL" "$NEXUS_URL"
 write_env_line "NODEHUB_AGENTIC_ENABLED" "true"
 write_env_line "NODEHUB_OPENAI_API_KEY" "$OPENAI_KEY"
 
+if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
+  # Browser runtime env. Picked up by the node-nexus browser runtime via
+  # process.env (dotenv does not override values already exported in the shell
+  # that launches it). Phase 1 bakes in shared 0G testnet credentials directly
+  # so operators never need to manage a separate .env file. Phase 2 will move
+  # these to per-operator credentials.
+  write_env_line "NODE_NAME" "${NODE_NAME:-pookie-laptop-node1}"
+  write_env_line "ENS_IDENTITY" "${ENS_IDENTITY:-your-node.eth}"
+  write_env_line "ZEROG_API_KEY" "$ZEROG_API_KEY"
+  write_env_line "ZEROG_PRIVATE_KEY" "$ZEROG_PRIVATE_KEY"
+  write_env_line "ZEROG_BASE_URL" "${ZEROG_BASE_URL:-https://router-api-testnet.integratenetwork.work/v1}"
+  write_env_line "ZEROG_MODEL" "${ZEROG_MODEL:-qwen/qwen-2.5-7b-instruct}"
+  write_env_line "ZEROG_STORAGE_RPC_URL" "${ZEROG_STORAGE_RPC_URL:-https://evmrpc-testnet.0g.ai}"
+  write_env_line "ZEROG_STORAGE_INDEXER_RPC" "${ZEROG_STORAGE_INDEXER_RPC:-https://indexer-storage-testnet-turbo.0g.ai}"
+  write_env_line "BROWSER_HEADLESS" "${BROWSER_HEADLESS:-false}"
+  write_env_line "ARTIFACT_RETENTION" "${ARTIFACT_RETENTION:-keep}"
+  write_env_line "PAYOUT_ADDRESS" "${PAYOUT_ADDRESS:-0x936cEfb89d47F620EAb665D9Bd27BA06b0cF11c7}"
+fi
+
 start_process "${LOG_PREFIX}-node" "cd '$ROOT' && ./node -config '$NODE_CONFIG_PATH'"
 log_step "Starting local AXL node."
 wait_for_http "http://127.0.0.1:9005/topology"
@@ -498,10 +536,10 @@ log_step "Starting MCP router."
 wait_for_http "http://127.0.0.1:9006/health"
 
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
-  start_process "${LOG_PREFIX}-nexus" "cd '$NEXUS_DIR' && node src/server.js"
-  log_step "Starting node-nexus-agent browser orchestrator."
+  start_process "${LOG_PREFIX}-nexus" "cd '$NEXUS_DIR' && set -a && source '$WORKER_ENV_FILE' && set +a && node src/server.js"
+  log_step "Starting NodeHub browser runtime."
   if ! wait_for_http "${NEXUS_URL}/health"; then
-    print_log_tail "Node Nexus log" "$LOG_DIR/${LOG_PREFIX}-nexus.log"
+    print_log_tail "Browser runtime log" "$LOG_DIR/${LOG_PREFIX}-nexus.log"
     exit 1
   fi
 fi
@@ -539,7 +577,7 @@ echo "Payout wallet: $LOWER_PAYOUT_WALLET"
 echo "Daemon: http://127.0.0.1:8110"
 echo "AXL API: http://127.0.0.1:9005"
 if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
-  echo "Node Nexus agent: ${NEXUS_URL}"
+  echo "Browser runtime: ${NEXUS_URL}"
 fi
 echo "Logs: $LOG_DIR"
 echo ""

@@ -7,16 +7,17 @@ from shared.tasks.browser_task import BrowserTaskPlugin
 from shared.tasks.registry import get_task_registry
 
 
-def test_registry_exposes_no_tasks_when_browser_agent_is_disabled() -> None:
+def test_registry_exposes_only_http_check_when_browser_agent_is_disabled() -> None:
     registry = get_task_registry()
     capability_names = {plugin.name for plugin in registry.all()}
-    assert capability_names == set()
+    assert capability_names == {CapabilityName.HTTP_CHECK}
 
 
 def test_registry_includes_browser_task_when_enabled() -> None:
     registry = get_task_registry(node_nexus_agent_enabled=True, node_nexus_agent_url="http://127.0.0.1:8080")
     capability_names = {plugin.name for plugin in registry.all()}
     assert CapabilityName.BROWSER_TASK in capability_names
+    assert CapabilityName.HTTP_CHECK in capability_names
 
 def test_browser_task_plugin_records_proof_hash(monkeypatch) -> None:
     class DummyResponse:

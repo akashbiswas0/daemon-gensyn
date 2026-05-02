@@ -211,7 +211,11 @@ start_process "customer-node" "cd '$ROOT' && ./node -config '$RUNTIME_DIR/custom
 start_process "worker-berlin-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9006"
 start_process "worker-tokyo-router" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=integrations python -m mcp_routing.mcp_router --port 9016"
 
-start_process "customer-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=127.0.0.1 NODEHUB_DAEMON_PORT=8010 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/customer-state' NODEHUB_DAEMON_ENABLE_WORKER=false NODEHUB_AXL_NODE_URL=http://127.0.0.1:9002 NODEHUB_WORKER_PUBLIC_LABEL='Customer Daemon' NODEHUB_WORKER_REGION='control' NODEHUB_WORKER_COUNTRY_CODE='IN' NODEHUB_WALLET_PRIVATE_KEY_PATH='$CUSTOMER_WALLET_KEY' uvicorn daemon.app:app --host 127.0.0.1 --port 8010"
+CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
+if [[ -n "$BOOTSTRAP_LAN_IP" ]]; then
+  CORS_ORIGINS="$CORS_ORIGINS,http://$BOOTSTRAP_LAN_IP:3000"
+fi
+start_process "customer-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=0.0.0.0 NODEHUB_DAEMON_PORT=8010 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/customer-state' NODEHUB_DAEMON_ENABLE_WORKER=false NODEHUB_AXL_NODE_URL=http://127.0.0.1:9002 NODEHUB_WORKER_PUBLIC_LABEL='Customer Daemon' NODEHUB_WORKER_REGION='control' NODEHUB_WORKER_COUNTRY_CODE='IN' NODEHUB_WALLET_PRIVATE_KEY_PATH='$CUSTOMER_WALLET_KEY' NODEHUB_CORS_ALLOWED_ORIGINS='$CORS_ORIGINS' uvicorn daemon.app:app --host 0.0.0.0 --port 8010"
 start_process "worker-berlin-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=127.0.0.1 NODEHUB_DAEMON_PORT=8110 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/berlin-state' NODEHUB_DAEMON_ENABLE_WORKER=true NODEHUB_AXL_NODE_URL=http://127.0.0.1:9005 NODEHUB_ROUTER_URL=http://127.0.0.1:9006 NODEHUB_WORKER_PUBLIC_LABEL='Berlin Worker' NODEHUB_WORKER_REGION='berlin' NODEHUB_WORKER_COUNTRY_CODE='DE' NODEHUB_WALLET_PRIVATE_KEY_PATH='$BERLIN_WALLET_KEY' uvicorn daemon.app:app --host 127.0.0.1 --port 8110"
 start_process "worker-tokyo-daemon" "cd '$ROOT' && source '$VENV_DIR/bin/activate' && PYTHONPATH=platform NODEHUB_DAEMON_HOST=127.0.0.1 NODEHUB_DAEMON_PORT=8210 NODEHUB_DAEMON_STATE_DIR='$RUNTIME_DIR/tokyo-state' NODEHUB_DAEMON_ENABLE_WORKER=true NODEHUB_AXL_NODE_URL=http://127.0.0.1:9015 NODEHUB_ROUTER_URL=http://127.0.0.1:9016 NODEHUB_WORKER_PUBLIC_LABEL='Tokyo Worker' NODEHUB_WORKER_REGION='tokyo' NODEHUB_WORKER_COUNTRY_CODE='JP' NODEHUB_WALLET_PRIVATE_KEY_PATH='$TOKYO_WALLET_KEY' uvicorn daemon.app:app --host 127.0.0.1 --port 8210"
 
@@ -221,13 +225,24 @@ wait_for_http "http://127.0.0.1:8210/health"
 wait_for_http "http://127.0.0.1:8110/.well-known/agent-card.json"
 wait_for_http "http://127.0.0.1:8210/.well-known/agent-card.json"
 
-start_process "dashboard" "cd '$WEB_DIR' && NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8010 NEXT_PUBLIC_OPERATOR_BOOTSTRAP_PEER='tls://${BOOTSTRAP_LAN_IP:-YOUR_BOOTSTRAP_HOST}:9101' npm run dev -- --hostname 127.0.0.1 --port 3000"
+DASHBOARD_API_BASE="http://127.0.0.1:8010"
+DASHBOARD_BIND_HOST="127.0.0.1"
+if [[ -n "$BOOTSTRAP_LAN_IP" ]]; then
+  DASHBOARD_API_BASE="http://$BOOTSTRAP_LAN_IP:8010"
+  DASHBOARD_BIND_HOST="0.0.0.0"
+fi
+start_process "dashboard" "cd '$WEB_DIR' && NEXT_PUBLIC_API_BASE_URL=$DASHBOARD_API_BASE NEXT_PUBLIC_OPERATOR_BOOTSTRAP_PEER='tls://${BOOTSTRAP_LAN_IP:-YOUR_BOOTSTRAP_HOST}:9101' npm run dev -- --hostname $DASHBOARD_BIND_HOST --port 3000"
 wait_for_http "http://127.0.0.1:3000"
 
 echo ""
 echo "NodeHub v2 demo is running."
-echo "Dashboard: http://127.0.0.1:3000"
-echo "Customer daemon: http://127.0.0.1:8010"
+if [[ -n "$BOOTSTRAP_LAN_IP" ]]; then
+  echo "Dashboard:        http://127.0.0.1:3000  (also reachable on LAN: http://$BOOTSTRAP_LAN_IP:3000)"
+  echo "Customer daemon:  http://127.0.0.1:8010  (also reachable on LAN: http://$BOOTSTRAP_LAN_IP:8010)"
+else
+  echo "Dashboard: http://127.0.0.1:3000"
+  echo "Customer daemon: http://127.0.0.1:8010"
+fi
 echo "Logs: $LOG_DIR"
 if [[ -n "$BOOTSTRAP_LAN_IP" ]]; then
   echo "Remote operator seed peer: tls://$BOOTSTRAP_LAN_IP:9101"

@@ -88,15 +88,11 @@ class OpenAIModelClient:
             "properties": {
                 "primary_peer_ids": {"type": "array", "items": {"type": "string"}},
                 "verifier_peer_ids": {"type": "array", "items": {"type": "string"}},
-                "use_lease_backed": {"type": "boolean"},
-                "selected_lease_id": {"type": ["string", "null"]},
                 "rationale": {"type": "string"},
             },
             "required": [
                 "primary_peer_ids",
                 "verifier_peer_ids",
-                "use_lease_backed",
-                "selected_lease_id",
                 "rationale",
             ],
         }

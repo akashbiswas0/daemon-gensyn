@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function LandingPage() {
   const nodes = await getNodes().catch(() => []);
-  const activeNodes = nodes.filter((node: any) => node.active);
+  const activeNodes = nodes;
 
   return (
     <>
@@ -75,7 +75,7 @@ export default async function LandingPage() {
           <article className="feature">
             <div className="feature-num">03</div>
             <h3>Browser Tasks</h3>
-            <p>Run node-nexus-agent browser workflows with 0G-backed proofs from remote operator laptops.</p>
+            <p>Run 0G-backed browser workflows from remote operator laptops, all under one NodeHub worker runtime.</p>
             <div className="feature-tag">0G integrated</div>
           </article>
         </div>

@@ -57,9 +57,7 @@ def test_planner_fallback_respects_region_and_capability() -> None:
             target_inputs={"url": "https://example.com"},
             requested_regions=["berlin", "tokyo"],
             discovered_nodes=nodes,
-            active_leases=[],
             verifier_count=1,
-            explicit_lease_id=None,
         )
     )
     assert isinstance(plan, JobPlan)
@@ -68,24 +66,12 @@ def test_planner_fallback_respects_region_and_capability() -> None:
     assert plan.selected_verifier_peer_ids == []
 
 
-def test_diagnoser_runs_bounded_followups() -> None:
+def test_diagnoser_skips_followups_in_browser_first_mode() -> None:
     agent = WorkerDiagnosisAgent(model_client=None, max_followups=2, agentic_enabled=True)
     calls: list[tuple[str, dict[str, object]]] = []
 
     async def runner(task_type: CapabilityName, arguments: dict[str, object]) -> TaskResult:
         calls.append((task_type.value, arguments))
-        if task_type == CapabilityName.DNS_CHECK:
-            return TaskResult(
-                job_id="job-1",
-                reservation_id="res-1",
-                task_type=task_type,
-                node_peer_id="peer-a",
-                node_region="berlin",
-                success=False,
-                failure=StructuredFailure(code="dns_error", message="dns failed"),
-                started_at=datetime.now(UTC),
-                completed_at=datetime.now(UTC),
-            )
         return TaskResult(
             job_id="job-1",
             reservation_id="res-1",
@@ -110,10 +96,9 @@ def test_diagnoser_runs_bounded_followups() -> None:
             follow_up_runner=runner,
         )
     )
-    assert len(calls) == 2
-    assert calls[0][0] == "dns_check"
-    assert calls[1][0] == "latency_probe"
-    assert "DNS" in summary.diagnosis or "dns" in summary.diagnosis
+    assert calls == []
+    assert summary.source == "deterministic"
+    assert summary.diagnosis
 
 
 def test_reporter_marks_verifier_mismatch() -> None:

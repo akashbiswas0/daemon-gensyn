@@ -91,8 +91,6 @@ class ReportSynthesisAgent:
             labels.append("verifier_mismatch")
         if all(not item.result.success for item in primary_receipts) and primary_receipts:
             labels.append("primary_failures")
-        if any(diag.follow_up_results.get("dns_check", {}).get("success") is False for diag in diagnoses):
-            labels.append("dns_issue")
         if any(
             item.result.failure and item.result.failure.code == "timeout"
             for item in primary_receipts

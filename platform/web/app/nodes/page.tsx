@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export default async function NodesPage() {
   const nodes = await getNodes().catch(() => []);
-  const activeNodes = nodes.filter((node: any) => node.active);
+  const activeNodes = nodes;
 
   return (
     <div className="page-stack">

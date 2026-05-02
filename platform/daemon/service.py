@@ -29,9 +29,6 @@ from shared.contracts import (
     ExecutionReceipt,
     ExecutionRequest,
     JobPlan,
-    LeaseAcceptance,
-    LeaseProposal,
-    LeaseRelease,
     NodeAdvertisement,
     NodeCapability,
     PaymentTerms,
@@ -70,18 +67,10 @@ class DiscoverRequest(BaseModel):
     depth: int = 1
 
 
-class LeaseRequestPayload(BaseModel):
-    capability_name: CapabilityName = CapabilityName.HTTP_CHECK
-    regions: list[str] = Field(default_factory=list)
-    duration_hours: int = 1
-    verifier_count: int = 0
-
-
 class JobRequestPayload(BaseModel):
     task_type: CapabilityName
     inputs: dict[str, Any]
     regions: list[str] = Field(default_factory=list)
-    lease_id: str | None = None
     verifier_count: int = 1
 
 
@@ -189,6 +178,8 @@ class DaemonRuntime:
         return capabilities
 
     def capability_price(self, capability_name: CapabilityName) -> float:
+        if capability_name == CapabilityName.HTTP_CHECK:
+            return self.settings.worker_price_http_check
         if capability_name == CapabilityName.BROWSER_TASK:
             return self.settings.worker_price_browser_task
         return 0.0
@@ -640,8 +631,31 @@ class DaemonRuntime:
         skills = {skill.get("id") for skill in card.get("skills", []) if isinstance(skill, dict)}
         return (
             self.settings.nodehub_service_name in skills
-            or {"discover_nodes", "request_quote", "propose_lease", "request_job_execution"}.issubset(skills)
+            or {"discover_nodes", "request_job_execution"}.issubset(skills)
         )
+
+    async def live_nodes(self) -> list[dict[str, Any]]:
+        nodes = [node for node in self.store.known_nodes() if node.get("active")]
+        if not nodes:
+            return []
+
+        async def check(node: dict[str, Any]) -> dict[str, Any] | None:
+            peer_id = str(node.get("peer_id", ""))
+            if peer_id == self.peer_id:
+                return node
+            try:
+                async with asyncio.timeout(5):
+                    card = await self.fetch_agent_card(peer_id)
+                if self.card_supports_coordination(card):
+                    return node
+            except Exception:
+                return None
+            return None
+
+        results = await asyncio.gather(*(check(node) for node in nodes))
+        live = [node for node in results if node is not None]
+        live.sort(key=lambda item: (item["region"], item["label"]))
+        return live
 
     async def send_coordination_request(
         self,
@@ -924,28 +938,6 @@ class DaemonRuntime:
         self.store.append(signed)
         return signed
 
-    async def handle_lease_proposal(self, envelope: SignedEnvelope) -> SignedEnvelope:
-        self.verify_envelope(envelope)
-        self.store.append(envelope)
-        proposal = LeaseProposal.model_validate(envelope.payload)
-        acceptance = LeaseAcceptance(
-            lease_id=proposal.lease_id,
-            quote_id=proposal.quote_id,
-            worker_wallet=self.public_wallet_address(),
-            worker_peer_id=self.peer_id,
-            accepted=self.settings.daemon_enable_worker,
-            reason=None if self.settings.daemon_enable_worker else "worker disabled",
-            accepted_at=datetime.now(UTC),
-        )
-        signed = self.sign_event("lease_acceptance", acceptance.model_dump(mode="json"))
-        self.store.append(signed)
-        return signed
-
-    async def handle_lease_release(self, envelope: SignedEnvelope) -> SignedEnvelope:
-        self.verify_envelope(envelope)
-        self.store.append(envelope)
-        return self.sign_event("lease_release_ack", {"lease_id": envelope.payload.get("lease_id"), "acknowledged_at": datetime.now(UTC).isoformat()})
-
     async def handle_execution_request(self, envelope: SignedEnvelope, verification: bool = False) -> SignedEnvelope:
         self.verify_envelope(envelope)
         self.store.append(envelope)
@@ -1037,14 +1029,6 @@ class DaemonRuntime:
             envelope = SignedEnvelope.model_validate(arguments["envelope"])
             result = await self.handle_quote_request(envelope)
             return {"envelope": result.model_dump(mode="json")}
-        if tool_name == "propose_lease":
-            envelope = SignedEnvelope.model_validate(arguments["envelope"])
-            result = await self.handle_lease_proposal(envelope)
-            return {"envelope": result.model_dump(mode="json")}
-        if tool_name == "release_lease":
-            envelope = SignedEnvelope.model_validate(arguments["envelope"])
-            result = await self.handle_lease_release(envelope)
-            return {"envelope": result.model_dump(mode="json")}
         if tool_name == "request_job_execution":
             envelope = SignedEnvelope.model_validate(arguments["envelope"])
             result = await self.handle_execution_request(envelope, verification=False)
@@ -1073,8 +1057,6 @@ class DaemonRuntime:
                 {"id": "discover_nodes", "name": "discover_nodes"},
                 {"id": "advertise_node", "name": "advertise_node"},
                 {"id": "request_quote", "name": "request_quote"},
-                {"id": "propose_lease", "name": "propose_lease"},
-                {"id": "release_lease", "name": "release_lease"},
                 {"id": "request_job_execution", "name": "request_job_execution"},
                 {"id": "request_verification", "name": "request_verification"},
                 {"id": "submit_attestation", "name": "submit_attestation"},
@@ -1102,7 +1084,7 @@ class DaemonRuntime:
                 self.store.import_many(envelopes)
             except Exception:
                 continue
-        return self.store.known_nodes()
+        return await self.live_nodes()
 
     async def seed_peer_ids(self, explicit_peers: list[str]) -> list[str]:
         topology = await self.get_topology()
@@ -1128,107 +1110,6 @@ class DaemonRuntime:
                 items.append(node)
         return items
 
-    async def request_lease(self, payload: LeaseRequestPayload) -> dict[str, Any]:
-        await self.discover_remote_nodes([])
-        nodes = [
-            node
-            for node in self.store.known_nodes()
-            if node["active"]
-            and any(cap["name"] == payload.capability_name.value for cap in node["capabilities"])
-            and (not payload.regions or node["region"] in payload.regions)
-        ]
-        if not nodes:
-            raise HTTPException(status_code=404, detail="no matching nodes discovered")
-
-        chosen_by_region: dict[str, dict[str, Any]] = {}
-        for node in nodes:
-            if payload.regions:
-                chosen_by_region.setdefault(node["region"], node)
-            else:
-                chosen_by_region.setdefault(node["peer_id"], node)
-
-        lease_id = str(uuid4())
-        for node in chosen_by_region.values():
-            quote_request = QuoteRequest(
-                request_id=str(uuid4()),
-                requester_wallet=self.assert_identity().wallet_address,
-                requester_peer_id=self.peer_id,
-                capability_name=payload.capability_name,
-                regions=payload.regions,
-                inputs={},
-                verifier_count=payload.verifier_count,
-                lease_duration_seconds=payload.duration_hours * 3600,
-            )
-            signed_quote_request = self.sign_event("request_quote", quote_request.model_dump(mode="json"))
-            self.store.append(signed_quote_request)
-            quote_result = await self.send_coordination_request(
-                node["peer_id"],
-                "request_quote",
-                {"envelope": signed_quote_request.model_dump(mode="json")},
-                fallback_tool_name="request_quote",
-            )
-            quote_envelope = SignedEnvelope.model_validate(quote_result["envelope"])
-            self.verify_envelope(quote_envelope)
-            self.store.append(quote_envelope)
-            quote_offer = QuoteOffer.model_validate(quote_envelope.payload)
-
-            proposal = LeaseProposal(
-                lease_id=lease_id,
-                quote_id=quote_offer.quote_id,
-                requester_wallet=self.assert_identity().wallet_address,
-                requester_peer_id=self.peer_id,
-                worker_wallet=quote_offer.worker_wallet,
-                worker_peer_id=quote_offer.worker_peer_id,
-                capability_name=payload.capability_name,
-                starts_at=datetime.now(UTC),
-                ends_at=datetime.now(UTC) + timedelta(hours=payload.duration_hours),
-                regions=payload.regions,
-                verifier_count=payload.verifier_count,
-                payment=quote_offer.payment,
-            )
-            signed_proposal = self.sign_event("lease_proposal", proposal.model_dump(mode="json"))
-            self.store.append(signed_proposal)
-            acceptance_result = await self.send_coordination_request(
-                node["peer_id"],
-                "propose_lease",
-                {"envelope": signed_proposal.model_dump(mode="json")},
-                fallback_tool_name="propose_lease",
-            )
-            acceptance_envelope = SignedEnvelope.model_validate(acceptance_result["envelope"])
-            self.verify_envelope(acceptance_envelope)
-            self.store.append(acceptance_envelope)
-
-        lease = next((item for item in self.store.leases() if item["id"] == lease_id), None)
-        if lease is None:
-            raise HTTPException(status_code=500, detail="lease was not materialized")
-        return lease
-
-    async def release_lease(self, lease_id: str) -> dict[str, Any]:
-        lease = next((item for item in self.store.leases() if item["id"] == lease_id), None)
-        if lease is None:
-            raise HTTPException(status_code=404, detail="lease not found")
-        release = LeaseRelease(
-            lease_id=lease_id,
-            requester_wallet=self.assert_identity().wallet_address,
-            requester_peer_id=self.peer_id,
-            released_at=datetime.now(UTC),
-            reason="released by local client",
-        )
-        envelope = self.sign_event("lease_release", release.model_dump(mode="json"))
-        self.store.append(envelope)
-        for peer_id in lease["accepted_peer_ids"]:
-            try:
-                await self.send_coordination_request(
-                    peer_id,
-                    "release_lease",
-                    {"envelope": envelope.model_dump(mode="json")},
-                    fallback_tool_name="release_lease",
-                )
-            except Exception:
-                continue
-        refreshed = next((item for item in self.store.leases() if item["id"] == lease_id), None)
-        return refreshed or lease
-
     async def request_job(self, payload: JobRequestPayload) -> dict[str, Any]:
         job_id = str(uuid4())
         discovered_nodes = await self.discover_remote_nodes([])
@@ -1239,9 +1120,7 @@ class DaemonRuntime:
                 target_inputs=payload.inputs,
                 requested_regions=payload.regions,
                 discovered_nodes=discovered_nodes,
-                active_leases=self.store.leases(),
                 verifier_count=payload.verifier_count,
-                explicit_lease_id=payload.lease_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1249,7 +1128,6 @@ class DaemonRuntime:
         self.store.append(self.sign_event("job_plan", plan.model_dump(mode="json")))
 
         selected_workers = list(plan.selected_primary_peer_ids)
-        lease_id = plan.selected_lease_id or payload.lease_id
         receipt_ids: list[str] = []
         primary_receipts: list[ExecutionReceipt] = []
         primary_request: ExecutionRequest | None = None
@@ -1259,7 +1137,7 @@ class DaemonRuntime:
             request = ExecutionRequest(
                 job_id=job_id,
                 reservation_id=reservation_id,
-                lease_id=lease_id,
+                lease_id=None,
                 requester_wallet=self.assert_identity().wallet_address,
                 requester_peer_id=self.peer_id,
                 worker_peer_id=worker_peer_id,
@@ -1294,7 +1172,7 @@ class DaemonRuntime:
             execution_request = ExecutionRequest(
                 job_id=job_id,
                 reservation_id=str(uuid4()),
-                lease_id=lease_id,
+                lease_id=None,
                 requester_wallet=self.assert_identity().wallet_address,
                 requester_peer_id=self.peer_id,
                 worker_peer_id=worker_peer_id,
@@ -1390,18 +1268,6 @@ class DaemonRuntime:
             if payload.method == "request_quote":
                 envelope = SignedEnvelope.model_validate(params["envelope"])
                 result = await self.handle_quote_request(envelope)
-                return {"jsonrpc": "2.0", "id": payload.id, "result": {"envelope": result.model_dump(mode="json")}}
-            if payload.method == "propose_lease":
-                envelope = SignedEnvelope.model_validate(params["envelope"])
-                result = await self.handle_lease_proposal(envelope)
-                return {"jsonrpc": "2.0", "id": payload.id, "result": {"envelope": result.model_dump(mode="json")}}
-            if payload.method == "accept_lease":
-                return {"jsonrpc": "2.0", "id": payload.id, "result": {"status": "ok"}}
-            if payload.method == "reject_lease":
-                return {"jsonrpc": "2.0", "id": payload.id, "result": {"status": "ok"}}
-            if payload.method == "release_lease":
-                envelope = SignedEnvelope.model_validate(params["envelope"])
-                result = await self.handle_lease_release(envelope)
                 return {"jsonrpc": "2.0", "id": payload.id, "result": {"envelope": result.model_dump(mode="json")}}
             if payload.method == "request_job_execution":
                 envelope = SignedEnvelope.model_validate(params["envelope"])
@@ -1523,7 +1389,7 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
     @app.get("/nodes")
     async def list_nodes() -> list[dict[str, Any]]:
         runtime.store.append(runtime.current_advertisement_envelope())
-        return runtime.store.known_nodes()
+        return await runtime.live_nodes()
 
     @app.post("/discover")
     async def discover(payload: DiscoverRequest) -> list[dict[str, Any]]:
@@ -1588,8 +1454,6 @@ def create_daemon_app(settings: PlatformSettings | None = None) -> FastAPI:
             {"name": "describe_node", "description": "Describe this NodeHub peer and its advertised capabilities."},
             {"name": "discover_nodes", "description": "Return signed node advertisements and related discovery envelopes."},
             {"name": "request_quote", "description": "Submit a signed quote request envelope and return a signed quote response."},
-            {"name": "propose_lease", "description": "Submit a signed lease proposal envelope and return a signed lease acceptance."},
-            {"name": "release_lease", "description": "Release a signed lease and return the release acknowledgement envelope."},
             {"name": "request_job_execution", "description": "Submit a signed execution request and return a signed execution receipt."},
             {"name": "request_verification", "description": "Submit a signed verification request and return a signed verification receipt."},
             {"name": "submit_attestation", "description": "Submit a signed attestation envelope and return an acknowledgement envelope."},
