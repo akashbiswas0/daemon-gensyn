@@ -635,25 +635,13 @@ class DaemonRuntime:
         )
 
     async def live_nodes(self) -> list[dict[str, Any]]:
-        nodes = [node for node in self.store.known_nodes() if node.get("active")]
-        if not nodes:
-            return []
-
-        async def check(node: dict[str, Any]) -> dict[str, Any] | None:
-            peer_id = str(node.get("peer_id", ""))
-            if peer_id == self.peer_id:
-                return node
-            try:
-                async with asyncio.timeout(5):
-                    card = await self.fetch_agent_card(peer_id)
-                if self.card_supports_coordination(card):
-                    return node
-            except Exception:
-                return None
-            return None
-
-        results = await asyncio.gather(*(check(node) for node in nodes))
-        live = [node for node in results if node is not None]
+        # A live node = signed advertisement with active=true and TTL not expired.
+        # store.known_nodes() already enforces both (active && expires_at >= now)
+        # in its `active` field. The discovery loop refreshes ads every ~45s, so
+        # this is a sufficient liveness signal without an extra per-request
+        # agent-card probe over the AXL mesh (which used to flicker nodes in
+        # and out of the dashboard when AXL routing was momentarily slow).
+        live = [node for node in self.store.known_nodes() if node.get("active")]
         live.sort(key=lambda item: (item["region"], item["label"]))
         return live
 
