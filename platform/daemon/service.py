@@ -1253,22 +1253,39 @@ class DaemonRuntime:
             dict.fromkeys(
                 explicit_peers
                 + self.settings.daemon_peer_seeds
-                + self._direct_peer_ids_from_topology(topology)
+                + self._topology_peer_ids(topology)
             )
         )
         return [peer_id for peer_id in peer_ids if peer_id and peer_id != self.peer_id]
 
     @staticmethod
-    def _direct_peer_ids_from_topology(topology: dict[str, Any]) -> list[str]:
+    def _topology_peer_ids(topology: dict[str, Any]) -> list[str]:
         items: list[str] = []
-        for peer in topology.get("peers", []):
+        our_public_key = topology.get("our_public_key")
+
+        for peer in topology.get("peers") or []:
             if isinstance(peer, dict):
                 value = peer.get("public_key") or peer.get("peer_id") or peer.get("key")
                 if value:
                     items.append(value)
             elif isinstance(peer, str):
                 items.append(peer)
-        return items
+
+        for peer in topology.get("tree") or []:
+            if not isinstance(peer, dict):
+                continue
+            value = peer.get("public_key") or peer.get("peer_id") or peer.get("key")
+            parent = peer.get("parent")
+            if value and value != our_public_key:
+                items.append(value)
+            if parent and parent != our_public_key:
+                items.append(parent)
+
+        deduped: list[str] = []
+        for item in items:
+            if item and item not in deduped:
+                deduped.append(item)
+        return deduped
 
     async def request_job(self, payload: JobRequestPayload) -> dict[str, Any]:
         job_id = str(uuid4())

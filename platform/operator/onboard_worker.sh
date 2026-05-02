@@ -184,15 +184,22 @@ print_log_tail() {
   fi
 }
 
+listening_process_info() {
+  local port="$1"
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+}
+
 port_in_use() {
   local port="$1"
-  lsof -ti tcp:"$port" >/dev/null 2>&1
+  [[ -n "$(listening_process_info "$port")" ]]
 }
 
 ensure_port_free() {
   local port="$1"
   if port_in_use "$port"; then
-    echo "Port $port is already in use. Stop the conflicting process before onboarding a worker." >&2
+    echo "Port $port is already in use by:" >&2
+    listening_process_info "$port" >&2
+    echo "Stop the conflicting process before onboarding a worker." >&2
     exit 1
   fi
 }
@@ -466,10 +473,8 @@ if [[ "$ENABLE_NEXUS_AGENT" == "true" ]]; then
   prompt_secret_if_missing "ZEROG_PRIVATE_KEY" "0G storage private key (stored in the local worker runtime): "
 fi
 
-if [[ -f "$PID_FILE" ]]; then
-  log_step "Stopping any previous local operator worker processes."
-  "$ROOT/platform/operator/stop_worker.sh" >/dev/null 2>&1 || true
-fi
+log_step "Stopping any previous local operator worker processes."
+"$ROOT/platform/operator/stop_worker.sh" >/dev/null 2>&1 || true
 
 for port in 9005 9006 8110 9101; do
   ensure_port_free "$port"

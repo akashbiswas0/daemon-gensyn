@@ -391,7 +391,7 @@ def test_advertise_node_tool_relays_new_remote_advertisement(tmp_path) -> None:
     assert published == ["peer-a", "peer-b"]
 
 
-def test_seed_peer_ids_prefers_direct_topology_peers(tmp_path) -> None:
+def test_seed_peer_ids_uses_topology_peers_and_tree_fallback(tmp_path) -> None:
     runtime = DaemonRuntime(
         PlatformSettings(
             daemon_state_dir=str(tmp_path),
@@ -402,15 +402,16 @@ def test_seed_peer_ids_prefers_direct_topology_peers(tmp_path) -> None:
 
     async def fake_topology() -> dict[str, object]:
         return {
-            "peers": [{"public_key": "direct-peer"}],
-            "tree": [{"public_key": "tree-peer"}],
+            "our_public_key": "self-peer",
+            "peers": None,
+            "tree": [{"public_key": "self-peer", "parent": "direct-parent"}],
         }
 
     runtime.get_topology = fake_topology  # type: ignore[method-assign]
 
     peer_ids = asyncio.run(runtime.seed_peer_ids([]))
 
-    assert peer_ids == ["direct-peer"]
+    assert peer_ids == ["direct-parent"]
 
 
 def test_demo_discover_response_imports_remote_advertisements(tmp_path) -> None:
