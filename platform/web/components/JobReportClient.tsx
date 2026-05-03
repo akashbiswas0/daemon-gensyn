@@ -91,6 +91,12 @@ type Report = {
       failure_reason?: string | null;
     } | null;
   }>;
+  request?: {
+    inputs?: {
+      url?: string;
+      task?: string;
+    };
+  };
 };
 
 export function JobReportClient({ jobId }: { jobId: string }) {
@@ -161,7 +167,7 @@ export function JobReportClient({ jobId }: { jobId: string }) {
         <span className="pill">
           {report.report_source === "openai-assisted" || report.planner_mode === "openai-assisted"
             ? "NodeHub-assisted"
-            : "Deterministic fallback"}
+            : "0g-Reports"}
         </span>
         {report.planner_verification_requested ? <span className="pill">Verification requested</span> : null}
       </div>
@@ -258,11 +264,13 @@ export function JobReportClient({ jobId }: { jobId: string }) {
           const request = result.raw?.request;
           const orchestrator = result.raw?.orchestrator_url;
           const screenshots = response?.screenshots ?? [];
+          const startUrl = request?.url ?? report.request?.inputs?.url ?? null;
+          const taskDescription = request?.task ?? report.request?.inputs?.task ?? null;
           return (
             <div key={`browser-${result.reservation_id}`} className="surface-card stack" style={{ gap: 8 }}>
               <div className="kicker">Browser task report</div>
-              {request?.url ? <div className="muted">Start URL: {request.url}</div> : null}
-              {request?.task ? <p>{request.task}</p> : null}
+              {startUrl ? <div className="muted">Start URL: {startUrl}</div> : null}
+              {taskDescription ? <p>{taskDescription}</p> : null}
               {result.success ? (
                 <>
                   {response?.reportHash ? (
