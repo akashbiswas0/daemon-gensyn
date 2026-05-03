@@ -3,7 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
+import { clientApiBase } from "../lib/clientApiBase";
+
+const API_BASE = clientApiBase();
 
 type RegionOption = {
   region: string;
@@ -17,7 +19,9 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
   const [method, setMethod] = useState("GET");
   const [timeoutSeconds, setTimeoutSeconds] = useState("10");
   const [browserTask, setBrowserTask] = useState("Find the page title and leave the browser on the evidence page.");
-  const [selectedRegion, setSelectedRegion] = useState("");
+  // Default to the first (and usually only) live region so the form is usable
+  // even if a click on the region selector is dropped pre-hydration.
+  const [selectedRegion, setSelectedRegion] = useState(regionOptions[0]?.region ?? "");
   const [status, setStatus] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -68,7 +72,13 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
   }
 
   return (
-    <div className="stack">
+    <form
+      className="stack"
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
       <div className="form-grid">
         <label className="field">
           <span>Job type</span>
@@ -77,30 +87,24 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
             <option value="http_check">http_check</option>
           </select>
         </label>
-        <div className="field">
-          <span>Regions</span>
+        <label className="field">
+          <span>Region</span>
           {regionOptions.length === 0 ? (
             <div className="input muted">No live operator regions available yet.</div>
           ) : (
-            <div className="region-toggle-grid">
-              {regionOptions.map((option) => {
-                const selected = selectedRegion === option.region;
-                return (
-                  <button
-                    key={option.region}
-                    type="button"
-                    className={`region-toggle${selected ? " selected" : ""}`}
-                    aria-pressed={selected}
-                    onClick={() => setSelectedRegion(option.region)}
-                  >
-                    <strong>{option.region}</strong>
-                    <span>{option.countryCode}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <select
+              className="input"
+              value={selectedRegion}
+              onChange={(event) => setSelectedRegion(event.target.value)}
+            >
+              {regionOptions.map((option) => (
+                <option key={option.region} value={option.region}>
+                  {option.region} · {option.countryCode}
+                </option>
+              ))}
+            </select>
           )}
-        </div>
+        </label>
       </div>
       <label className="field">
         <span>{taskType === "browser_task" ? "Start URL" : "Target URL"}</span>
@@ -152,11 +156,11 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
               ? `HTTP check will run on the live ${selectedRegion} operator.`
               : "Select one live operator region to run the HTTP check."}
         </div>
-        <button type="button" className="button" onClick={submit} disabled={isSubmitting}>
+        <button type="submit" className="button" disabled={isSubmitting || !selectedRegion}>
           {isSubmitting ? "Dispatching..." : taskType === "browser_task" ? "Run Browser Task" : "Run HTTP Check"}
         </button>
       </div>
       {status ? <div className="pill">{status}</div> : null}
-    </div>
+    </form>
   );
 }

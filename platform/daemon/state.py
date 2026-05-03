@@ -204,6 +204,7 @@ class LocalEventStore:
 
     def jobs(self) -> list[dict[str, Any]]:
         requests: dict[str, ExecutionRequest] = {}
+        request_submitted_at: dict[str, datetime] = {}
         primary_receipts: dict[str, list[ExecutionReceipt]] = defaultdict(list)
         verification_receipts: dict[str, list[VerificationReceipt]] = defaultdict(list)
         plans: dict[str, JobPlan] = {}
@@ -212,6 +213,7 @@ class LocalEventStore:
             if envelope.event_type == "execution_request":
                 request = ExecutionRequest.model_validate(envelope.payload)
                 requests[request.job_id] = request
+                request_submitted_at[request.job_id] = envelope.timestamp
             elif envelope.event_type == "execution_receipt":
                 receipt = ExecutionReceipt.model_validate(envelope.payload)
                 primary_receipts[receipt.job_id].append(receipt)
@@ -228,6 +230,7 @@ class LocalEventStore:
             status = JobStatus.RUNNING.value
             if receipts:
                 status = JobStatus.COMPLETED.value
+            submitted_at = request_submitted_at.get(job_id)
             jobs.append(
                 {
                     "id": job_id,
@@ -238,9 +241,15 @@ class LocalEventStore:
                     "primary_receipt_count": len(receipts),
                     "verification_receipt_count": len(verification_receipts.get(job_id, [])),
                     "planner_mode": plans.get(job_id).planner_mode if job_id in plans else "deterministic",
+                    "submitted_at": submitted_at.isoformat() if submitted_at else None,
                 }
             )
-        jobs.sort(key=lambda item: item["id"], reverse=True)
+        # Newest first: sort by the execution_request envelope timestamp.
+        # Fall back to job_id only when timestamps are missing on legacy rows.
+        jobs.sort(
+            key=lambda item: (item.get("submitted_at") or "", item["id"]),
+            reverse=True,
+        )
         return jobs
 
     def job_report(self, job_id: str) -> dict[str, Any] | None:

@@ -3,7 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
+import { clientApiBase } from "../lib/clientApiBase";
+
+const API_BASE = clientApiBase();
 
 type Identity = {
   wallet_address: string;

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError, RateLimitError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from browser_use import Agent, ChatOpenAI
 from browser_use.browser.profile import BrowserProfile
@@ -699,10 +699,60 @@ class BrowserUseCompatibleChatOpenAI(ChatOpenAI):
             print(f"INFO|qwen_action_raw={content[:240].replace(chr(10), ' ')}", flush=True)
 
             normalized = normalize_agent_output_json(content, browser_context)
-            if normalized is None:
-                parsed = output_format.model_validate_json(content)
-            else:
-                parsed = output_format.model_validate(normalized)
+            parsed = None
+            if normalized is not None:
+                try:
+                    parsed = output_format.model_validate(normalized)
+                    BrowserUseCompatibleChatOpenAI._consecutive_drifts = 0
+                except ValidationError as ve:
+                    print(
+                        f"INFO|qwen_validation_drift_normalized={len(ve.errors())}_errs first={ve.errors()[0].get('loc')}",
+                        flush=True,
+                    )
+            if parsed is None:
+                try:
+                    parsed = output_format.model_validate_json(content)
+                    BrowserUseCompatibleChatOpenAI._consecutive_drifts = 0
+                except ValidationError as ve:
+                    # qwen drifted off-schema (free text, malformed JSON, etc.).
+                    # Crashing the whole run wastes the entire 20-step budget;
+                    # return a safe wait so the agent loop tries again next tick.
+                    print(
+                        f"INFO|qwen_drift_recovered={len(ve.errors())}_errs first={ve.errors()[0].get('loc')}",
+                        flush=True,
+                    )
+                    # If qwen drifts repeatedly, bail out instead of burning 8
+                    # rate-limited LLM calls on guaranteed waits. Three drifts
+                    # in a row almost always means the model is stuck.
+                    BrowserUseCompatibleChatOpenAI._consecutive_drifts = (
+                        getattr(BrowserUseCompatibleChatOpenAI, "_consecutive_drifts", 0) + 1
+                    )
+                    if BrowserUseCompatibleChatOpenAI._consecutive_drifts >= 3:
+                        BrowserUseCompatibleChatOpenAI._consecutive_drifts = 0
+                        parsed = output_format.model_validate(
+                            {
+                                "evaluation_previous_goal": "Model drifted off-schema repeatedly.",
+                                "memory": "",
+                                "next_goal": "Stop and report the partial state for evidence capture.",
+                                "action": [
+                                    {
+                                        "done": {
+                                            "text": "Stopped early after repeated model drift; using partial browser state for evidence.",
+                                            "success": False,
+                                        }
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        parsed = output_format.model_validate(
+                            {
+                                "evaluation_previous_goal": "Model output was not parseable; recovering.",
+                                "memory": "",
+                                "next_goal": "Re-read the page state and pick a single concrete action.",
+                                "action": [{"wait": {"seconds": 1}}],
+                            }
+                        )
 
             return ChatInvokeCompletion(
                 completion=parsed,
@@ -890,7 +940,8 @@ async def main() -> None:
             except Exception as error:
                 info("screenshotWarning", f"{screenshot_path.name}: {error}")
 
-        history = await agent.run(max_steps=20, on_step_end=capture_step)
+        max_steps = int(os.getenv("BROWSER_AGENT_MAX_STEPS", "8"))
+        history = await agent.run(max_steps=max_steps, on_step_end=capture_step)
         is_successful = history.is_successful()
 
         if history.is_done() is not True or is_successful is False:

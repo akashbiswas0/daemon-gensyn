@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { CopyableId } from "../../components/CopyableId";
 import { RegionHeatmap } from "../../components/RegionHeatmap";
 import { getIdentity, getJobs, getNodes } from "../../lib/api";
@@ -18,7 +16,6 @@ export default async function DashboardPage() {
   const regionSet = new Set<string>();
   for (const node of liveNodes) regionSet.add((node.region || "unknown").toLowerCase());
 
-  const recentJobs = jobs.slice(0, 4);
   return (
     <div className="dashboard-stack">
       <section className="dash-kpis">
@@ -72,62 +69,28 @@ export default async function DashboardPage() {
         <RegionHeatmap initialNodes={liveNodes} className="dashboard-heatmap" />
       </section>
 
-      <section className="activity-grid">
-        <article className="surface-card">
-          <div className="stack-header">
-            <div>
-              <div className="kicker">Recent</div>
-              <h3>Jobs</h3>
-            </div>
-            <Link className="button button-ghost button-small" href="/jobs">
-              All jobs →
-            </Link>
+      <article className="surface-card">
+        <div className="kicker">Focus</div>
+        <h3>Browser-first operator mesh</h3>
+        <p className="muted">
+          Only active operators are shown and targeted. Browser tasks stay primary, with HTTP checks retained as the
+          lightweight fallback capability.
+        </p>
+        <div className="stack" style={{ gap: 8 }}>
+          <div className="meta-row">
+            <span className="muted">Primary capability</span>
+            <strong>browser_task</strong>
           </div>
-          {recentJobs.length === 0 ? (
-            <p className="muted">No jobs yet. Submit one from the Jobs page.</p>
-          ) : (
-            <ul className="activity-list">
-              {recentJobs.map((job: any) => (
-                <li key={job.id} className="activity-row">
-                  <div>
-                    <strong>{job.task_type}</strong>
-                    <div className="muted">{job.regions?.join(", ") || "auto region"}</div>
-                  </div>
-                  <div className="activity-row-end">
-                    <span className={`status-pill status-${job.status?.toLowerCase()}`}>
-                      {job.status?.toLowerCase()}
-                    </span>
-                    <Link href={`/jobs/${job.id}`} className="row-link">Open →</Link>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
-
-        <article className="surface-card">
-          <div className="kicker">Focus</div>
-          <h3>Browser-first operator mesh</h3>
-          <p className="muted">
-            Only active operators are shown and targeted. Browser tasks stay primary, with HTTP checks retained as the
-            lightweight fallback capability.
-          </p>
-          <div className="stack" style={{ gap: 8 }}>
-            <div className="meta-row">
-              <span className="muted">Primary capability</span>
-              <strong>browser_task</strong>
-            </div>
-            <div className="meta-row">
-              <span className="muted">Secondary capability</span>
-              <strong>http_check</strong>
-            </div>
-            <div className="meta-row">
-              <span className="muted">Worker onboarding</span>
-              <strong>Wallet-bound local operators</strong>
-            </div>
+          <div className="meta-row">
+            <span className="muted">Secondary capability</span>
+            <strong>http_check</strong>
           </div>
-        </article>
-      </section>
+          <div className="meta-row">
+            <span className="muted">Worker onboarding</span>
+            <strong>Wallet-bound local operators</strong>
+          </div>
+        </div>
+      </article>
     </div>
   );
 }

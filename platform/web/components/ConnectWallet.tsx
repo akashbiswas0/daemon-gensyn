@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { clearAuthSession, writeAuthSession } from "../lib/auth";
 import { BASE_SEPOLIA } from "../lib/base-sepolia";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
+import { clientApiBase } from "../lib/clientApiBase";
+
+const API_BASE = clientApiBase();
 
 declare global {
   interface Window {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
+import { clientApiBase } from "../lib/clientApiBase";
 const isBaseSepolia = (network: string) => network === "base-sepolia" || network === "sepolia";
 const explorerTxUrl = (network: string, txHash: string) =>
   isBaseSepolia(network) ? `https://sepolia.basescan.org/tx/${txHash}` : "#";
@@ -99,10 +99,17 @@ export function JobReportClient({ jobId }: { jobId: string }) {
 
   useEffect(() => {
     let alive = true;
+    const apiBase = clientApiBase();
     const load = async () => {
+      const ctrl = new AbortController();
+      // Hard timeout so a Local-Network-privacy stall (which doesn't reject
+      // the fetch on macOS Sequoia) surfaces as a visible error instead of
+      // leaving the user stuck on "Loading report...".
+      const timer = window.setTimeout(() => ctrl.abort(), 8000);
       try {
-        const response = await fetch(`${API_BASE}/reports/jobs/${jobId}`, {
+        const response = await fetch(`${apiBase}/reports/jobs/${jobId}`, {
           cache: "no-store",
+          signal: ctrl.signal,
         });
         if (!response.ok) {
           throw new Error(`Failed to load report (${response.status})`);
@@ -114,8 +121,16 @@ export function JobReportClient({ jobId }: { jobId: string }) {
         }
       } catch (err) {
         if (alive) {
-          setError(err instanceof Error ? err.message : "Failed to load report");
+          const message =
+            err instanceof DOMException && err.name === "AbortError"
+              ? `Daemon at ${apiBase} did not respond. Open this dashboard from the same hostname the daemon binds to (try http://127.0.0.1:3000).`
+              : err instanceof Error
+                ? err.message
+                : "Failed to load report";
+          setError(message);
         }
+      } finally {
+        window.clearTimeout(timer);
       }
     };
     load();
