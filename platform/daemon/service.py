@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import httpx
 from eth_account import Account
+from eth_utils import to_checksum_address
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -427,7 +428,7 @@ class DaemonRuntime:
             },
             payment=PaymentTerms(
                 quoted_price=None,
-                currency="USDC",
+                currency=self.settings.settlement_currency or "0G",
                 payment_terms=payment_mode,
             ),
         )
@@ -659,40 +660,46 @@ class DaemonRuntime:
 
     async def _broadcast_native_payment(
         self, settlement: SettlementRecord
-    ) -> tuple[str | None, str | None]:
+    ) -> tuple[str | None, float | None, str | None]:
+        """Returns (tx_hash, amount_sent, error). amount_sent is the float we actually paid."""
         rpc_url = (self.settings.settlement_rpc_url or "").strip()
         if not rpc_url:
-            return None, "no settlement_rpc_url configured"
+            return None, None, "no settlement_rpc_url configured"
         if settlement.network != self.settings.settlement_network:
-            return None, f"settlement network {settlement.network} not supported"
-        worker_wallet = settlement.worker_wallet
-        if not (worker_wallet.lower().startswith("0x") and len(worker_wallet) == 42):
-            return None, f"invalid worker wallet: {worker_wallet}"
+            return None, None, f"settlement network {settlement.network} not supported"
+        raw_wallet = (settlement.worker_wallet or "").strip()
+        if not (raw_wallet.lower().startswith("0x") and len(raw_wallet) == 42):
+            return None, None, f"invalid worker wallet: {raw_wallet}"
+        try:
+            to_addr = to_checksum_address(raw_wallet)
+        except Exception as exc:
+            return None, None, f"invalid worker wallet: {exc}"
+        amount_og = float(self.settings.settlement_fixed_amount_og)
         try:
             amount_wei = int(
-                (Decimal(str(settlement.amount)) * (Decimal(10) ** NATIVE_TOKEN_DECIMALS)).to_integral_value()
+                (Decimal(str(amount_og)) * (Decimal(10) ** NATIVE_TOKEN_DECIMALS)).to_integral_value()
             )
         except (InvalidOperation, ValueError) as exc:
-            return None, f"invalid amount: {exc}"
+            return None, None, f"invalid amount: {exc}"
         if amount_wei <= 0:
-            return None, "amount is zero"
+            return None, None, "amount is zero"
         signer_key = self._payment_signer_key()
         if not signer_key:
-            return None, "no payment private key configured"
+            return None, None, "no payment private key configured"
         try:
             account = Account.from_key(signer_key)
         except Exception as exc:
-            return None, f"invalid payment key: {exc}"
+            return None, None, f"invalid payment key: {exc}"
         try:
             nonce_hex = await self._rpc_call(
                 rpc_url, "eth_getTransactionCount", [account.address, "pending"]
             )
             gas_price_hex = await self._rpc_call(rpc_url, "eth_gasPrice", [])
         except Exception as exc:
-            return None, f"rpc preflight failed: {exc}"
+            return None, None, f"rpc preflight failed: {exc}"
         try:
             tx = {
-                "to": worker_wallet,
+                "to": to_addr,
                 "value": amount_wei,
                 "gas": NATIVE_TRANSFER_GAS,
                 "gasPrice": int(gas_price_hex, 16),
@@ -701,25 +708,25 @@ class DaemonRuntime:
             }
             signed = account.sign_transaction(tx)
         except Exception as exc:
-            return None, f"sign failed: {exc}"
+            return None, None, f"sign failed: {exc}"
         raw_bytes = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
         if raw_bytes is None:
-            return None, "signed tx missing raw payload"
+            return None, None, "signed tx missing raw payload"
         raw_hex = "0x" + bytes(raw_bytes).hex()
         try:
             tx_hash = await self._rpc_call(rpc_url, "eth_sendRawTransaction", [raw_hex])
         except Exception as exc:
-            return None, f"send failed: {exc}"
+            return None, None, f"send failed: {exc}"
         if not isinstance(tx_hash, str):
-            return None, "rpc did not return a tx hash"
+            return None, None, "rpc did not return a tx hash"
         logger.info(
             "settlement broadcast tx=%s amount=%s %s to=%s",
             tx_hash,
-            settlement.amount,
-            settlement.currency,
-            worker_wallet,
+            amount_og,
+            self.settings.settlement_currency or "0G",
+            to_addr,
         )
-        return tx_hash, None
+        return tx_hash, amount_og, None
 
     async def _check_tx_receipt(self, tx_hash: str) -> tuple[str | None, str | None]:
         """Returns (status, error). status is 'success', 'failed', or None when still pending."""
@@ -767,16 +774,26 @@ class DaemonRuntime:
 
         for raw in self.store.settlements():
             settlement = SettlementRecord.model_validate(raw)
-            if settlement.status in {SettlementStatus.CONFIRMED, SettlementStatus.FAILED}:
+            if settlement.status == SettlementStatus.CONFIRMED:
                 continue
-            if settlement.status == SettlementStatus.PENDING:
-                tx_hash, err = await self._broadcast_native_payment(settlement)
+            # FAILED settlements without a tx_hash mean the broadcast itself failed
+            # (sign error, rpc preflight, etc.) — those are retryable once the
+            # underlying issue is fixed in code or config. FAILED with a tx_hash
+            # means the chain reverted the tx; don't retry.
+            if settlement.status == SettlementStatus.FAILED and settlement.tx_hash:
+                continue
+            broadcast_states = {SettlementStatus.PENDING, SettlementStatus.FAILED}
+            if settlement.status in broadcast_states:
+                tx_hash, sent_amount, err = await self._broadcast_native_payment(settlement)
                 if tx_hash:
                     self.store_settlement(
                         settlement.model_copy(
                             update={
                                 "status": SettlementStatus.TRIGGERED,
                                 "tx_hash": tx_hash,
+                                "amount": sent_amount if sent_amount is not None else settlement.amount,
+                                "currency": self.settings.settlement_currency or settlement.currency,
+                                "network": self.settings.settlement_network,
                                 "failure_reason": None,
                                 "updated_at": datetime.now(UTC),
                             }
@@ -895,6 +912,7 @@ class DaemonRuntime:
             peer_id,
             kind="execution_request",
             payload={"envelope": envelope.model_dump(mode="json")},
+            timeout=900.0,
         )
 
     async def publish_advertisement(self, peer_id: str, envelope: SignedEnvelope) -> None:
@@ -956,6 +974,7 @@ class DaemonRuntime:
             peer_id,
             kind="verification_request",
             payload={"envelope": envelope.model_dump(mode="json")},
+            timeout=900.0,
         )
 
     async def submit_attestation(self, peer_id: str, envelope: SignedEnvelope) -> dict[str, Any]:

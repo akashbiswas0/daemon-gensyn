@@ -3,18 +3,10 @@
 import { useEffect, useState } from "react";
 
 import { clientApiBase } from "../lib/clientApiBase";
-const isBaseSepolia = (network: string) => network === "base-sepolia" || network === "sepolia";
-const isZeroGGalileo = (network: string) => network === "0g-galileo" || network === "0g";
-const explorerTxUrl = (network: string, txHash: string) => {
-  if (isZeroGGalileo(network)) return `https://chainscan-galileo.0g.ai/tx/${txHash}`;
-  if (isBaseSepolia(network)) return `https://sepolia.basescan.org/tx/${txHash}`;
-  return "#";
-};
-const networkLabel = (network: string) => {
-  if (isZeroGGalileo(network)) return "0G Galileo";
-  if (isBaseSepolia(network)) return "Base Sepolia";
-  return network;
-};
+const explorerTxUrl = (_network: string, txHash: string) => `https://chainscan-galileo.0g.ai/tx/${txHash}`;
+const networkLabel = (network: string) =>
+  network === "0g-galileo" || network === "0g" ? "0G Galileo" : network;
+const screenshotName = (path: string) => path.split("/").pop() ?? path;
 
 type Report = {
   job_id: string;
@@ -275,49 +267,82 @@ export function JobReportClient({ jobId }: { jobId: string }) {
           const startUrl = request?.url ?? report.request?.inputs?.url ?? null;
           const taskDescription = request?.task ?? report.request?.inputs?.task ?? null;
           return (
-            <div key={`browser-${result.reservation_id}`} className="surface-card stack" style={{ gap: 8 }}>
+            <div key={`browser-${result.reservation_id}`} className="surface-card stack" style={{ gap: 12 }}>
               <div className="kicker">Browser task report</div>
-              {startUrl ? <div className="muted">Start URL: {startUrl}</div> : null}
-              {taskDescription ? <p>{taskDescription}</p> : null}
+              {startUrl ? (
+                <div className="muted" style={{ wordBreak: "break-all" }}>
+                  <span>Start URL · </span>
+                  <a href={startUrl} target="_blank" rel="noreferrer">{startUrl}</a>
+                </div>
+              ) : null}
+              {taskDescription ? <p style={{ margin: 0 }}>{taskDescription}</p> : null}
               {result.success ? (
                 <>
                   {response?.reportHash ? (
-                    <div>
-                      Report PDF:&nbsp;
+                    <div className="row" style={{ alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                       <a
+                        className="button button-small"
                         href={`https://indexer-storage-testnet-turbo.0g.ai/file?root=${response.reportHash}`}
                         target="_blank"
                         rel="noreferrer"
                       >
-                        Download from 0G Storage
+                        Download report PDF
                       </a>
+                      <span className="muted">stored on 0G Storage testnet</span>
                     </div>
                   ) : null}
-                  {response?.reportUri ? (
-                    <div className="muted" style={{ wordBreak: "break-all" }}>
-                      URI: <code>{response.reportUri}</code>
-                    </div>
-                  ) : null}
-                  {response?.reportHash ? (
-                    <div className="muted" style={{ wordBreak: "break-all" }}>
-                      Report hash: <code>{response.reportHash}</code>
-                    </div>
-                  ) : null}
-                  {response?.txHash ? (
-                    <div className="muted">0G Storage tx: {response.txHash}</div>
-                  ) : null}
-                  {response?.reportPath ? (
-                    <div className="muted">Local PDF on operator: {response.reportPath}</div>
-                  ) : null}
+                  <div className="stack" style={{ gap: 6 }}>
+                    {response?.reportHash ? (
+                      <div className="stack" style={{ gap: 2 }}>
+                        <span className="muted">Report hash</span>
+                        <a
+                          href={`https://indexer-storage-testnet-turbo.0g.ai/file?root=${response.reportHash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ wordBreak: "break-all" }}
+                        >
+                          <code>{response.reportHash}</code>
+                        </a>
+                      </div>
+                    ) : null}
+                    {response?.txHash ? (
+                      <div className="stack" style={{ gap: 2 }}>
+                        <span className="muted">Storage tx</span>
+                        <a
+                          href={`https://chainscan-galileo.0g.ai/tx/${response.txHash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ wordBreak: "break-all" }}
+                        >
+                          <code>{response.txHash}</code>
+                        </a>
+                      </div>
+                    ) : null}
+                    {screenshots.length ? (
+                      <div className="meta-row" style={{ gap: 8 }}>
+                        <span className="muted">Evidence</span>
+                        <span>{screenshots.length} screenshot{screenshots.length === 1 ? "" : "s"}</span>
+                      </div>
+                    ) : null}
+                  </div>
                   {screenshots.length ? (
                     <details>
-                      <summary>{screenshots.length} screenshot path{screenshots.length === 1 ? "" : "s"} on operator</summary>
-                      <ul style={{ marginTop: 8 }}>
+                      <summary className="muted" style={{ cursor: "pointer" }}>
+                        Step-by-step evidence ({screenshots.length})
+                      </summary>
+                      <ul style={{ marginTop: 8, paddingLeft: 20, columns: screenshots.length > 4 ? 2 : 1 }}>
                         {screenshots.map((path) => (
-                          <li key={path} className="muted">{path}</li>
+                          <li key={path}>
+                            <code className="muted">{screenshotName(path)}</code>
+                          </li>
                         ))}
                       </ul>
                     </details>
+                  ) : null}
+                  {response?.reportPath ? (
+                    <div className="muted" style={{ fontSize: "0.85em" }}>
+                      Operator artifact: <code>{response.reportPath}</code>
+                    </div>
                   ) : null}
                 </>
               ) : (

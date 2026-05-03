@@ -79,7 +79,7 @@ def test_lease_and_job_report_materialization(tmp_path) -> None:
         starts_at=datetime.now(UTC),
         ends_at=datetime.now(UTC) + timedelta(hours=1),
         regions=["berlin"],
-        payment=PaymentTerms(quoted_price=0.25, currency="USDC", payment_terms="deferred"),
+        payment=PaymentTerms(quoted_price=0.25, currency="0G", payment_terms="deferred"),
     )
     store.append(requester.sign_envelope("lease_proposal", proposal.model_dump(mode="json")))
     acceptance = LeaseAcceptance(
@@ -108,7 +108,7 @@ def test_lease_and_job_report_materialization(tmp_path) -> None:
         inputs={"url": "https://example.com", "method": "GET", "timeout_seconds": 5},
         role=ReservationRole.PRIMARY,
         verification_policy=VerificationPolicy(verifier_count=0),
-        payment=PaymentTerms(currency="USDC", payment_terms="deferred"),
+        payment=PaymentTerms(currency="0G", payment_terms="deferred"),
     )
     store.append(requester.sign_envelope("execution_request", request.model_dump(mode="json")))
     plan = JobPlan(
@@ -145,7 +145,7 @@ def test_lease_and_job_report_materialization(tmp_path) -> None:
         worker_peer_id=worker.peer_id,
         role=ReservationRole.PRIMARY,
         result=result,
-        payment=PaymentTerms(currency="USDC", payment_terms="deferred"),
+        payment=PaymentTerms(currency="0G", payment_terms="deferred"),
     )
     store.append(worker.sign_envelope("execution_receipt", receipt.model_dump(mode="json")))
     settlement = SettlementRecord(
@@ -157,9 +157,9 @@ def test_lease_and_job_report_materialization(tmp_path) -> None:
         role=ReservationRole.PRIMARY,
         capability_name=CapabilityName.HTTP_CHECK,
         amount=0.25,
-        currency="USDC",
+        currency="0G",
         token_address="0xToken",
-        network="base-sepolia",
+        network="0g-galileo",
         status=SettlementStatus.CONFIRMED,
         tx_hash="0xabc123",
         created_at=datetime.now(UTC),
@@ -225,7 +225,7 @@ def test_attestations_are_backfilled_from_existing_receipts(tmp_path) -> None:
         worker_peer_id=worker.peer_id,
         role=ReservationRole.PRIMARY,
         result=result,
-        payment=PaymentTerms(currency="USDC", payment_terms="deferred"),
+        payment=PaymentTerms(currency="0G", payment_terms="deferred"),
     )
     store.append(worker.sign_envelope("execution_receipt", receipt.model_dump(mode="json")))
 
@@ -496,7 +496,7 @@ def test_demo_execution_request_sends_receipt_back_over_raw_transport(tmp_path) 
         inputs={"url": "https://example.com", "method": "GET", "timeout_seconds": 10},
         role=ReservationRole.PRIMARY,
         verification_policy=VerificationPolicy(verifier_count=0),
-        payment=PaymentTerms(currency="USDC", payment_terms="demo"),
+        payment=PaymentTerms(currency="0G", payment_terms="demo"),
     )
     envelope: SignedEnvelope = requester.sign_envelope("execution_request", request.model_dump(mode="json"))
 
@@ -577,7 +577,7 @@ def test_request_job_dispatches_directly_to_selected_region(tmp_path) -> None:
                 completed_at=datetime.now(UTC),
                 raw={"proof_hash": "0xproof"},
             ),
-            payment=PaymentTerms(currency="USDC", payment_terms="demo"),
+            payment=PaymentTerms(currency="0G", payment_terms="demo"),
         )
         worker = LocalIdentity.load(state_dir=str(tmp_path / "worker"), peer_id=peer_id)
         return {"envelope": worker.sign_envelope("execution_receipt", receipt.model_dump(mode="json")).model_dump(mode="json")}

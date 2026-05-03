@@ -475,7 +475,7 @@ class SettlementRecord(BaseModel):
     amount: float
     currency: str
     token_address: str
-    network: str = "base-sepolia"
+    network: str = "0g-galileo"
     status: SettlementStatus = SettlementStatus.PENDING
     tx_hash: str | None = None
     failure_reason: str | None = None

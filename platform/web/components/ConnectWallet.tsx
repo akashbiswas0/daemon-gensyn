@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { clearAuthSession, writeAuthSession } from "../lib/auth";
-import { BASE_SEPOLIA } from "../lib/base-sepolia";
+import { ZEROG_GALILEO } from "../lib/zerog-galileo";
 
 import { clientApiBase } from "../lib/clientApiBase";
 
@@ -17,7 +17,7 @@ declare global {
 }
 
 export function ConnectWallet() {
-  const [status, setStatus] = useState("Wallet not connected. Base Sepolia required for NodeHub.");
+  const [status, setStatus] = useState("Wallet not connected. 0G Galileo required for NodeHub.");
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,7 +28,7 @@ export function ConnectWallet() {
     const wallet = localStorage.getItem("nodehub_wallet");
     if (token && wallet) {
       setWalletAddress(wallet);
-      setStatus(`Connected on Base Sepolia: ${wallet.slice(0, 6)}...${wallet.slice(-4)}`);
+      setStatus(`Connected on 0G Galileo: ${wallet.slice(0, 6)}...${wallet.slice(-4)}`);
     }
   }, []);
 
@@ -55,33 +55,33 @@ export function ConnectWallet() {
     return "Wallet connection failed";
   }
 
-  async function ensureBaseSepolia() {
+  async function ensureZeroGGalileo() {
     if (!window.ethereum) {
       throw new Error("No injected wallet found");
     }
     const currentChainId = (await window.ethereum.request({ method: "eth_chainId" })) as string;
-    if (currentChainId?.toLowerCase() === BASE_SEPOLIA.chainId) {
+    if (currentChainId?.toLowerCase() === ZEROG_GALILEO.chainId) {
       return;
     }
     try {
-      setStatus("Switching to Base Sepolia...");
+      setStatus("Switching to 0G Galileo...");
       await window.ethereum.request({
         method: "wallet_switchEthereumChain",
-        params: [{ chainId: BASE_SEPOLIA.chainId }]
+        params: [{ chainId: ZEROG_GALILEO.chainId }]
       });
     } catch (error) {
       const switchError = error as { code?: number };
       if (switchError.code !== 4902) {
-        throw new Error("Please switch your wallet to Base Sepolia");
+        throw new Error("Please switch your wallet to 0G Galileo");
       }
-      setStatus("Adding Base Sepolia to wallet...");
+      setStatus("Adding 0G Galileo to wallet...");
       await window.ethereum.request({
         method: "wallet_addEthereumChain",
-        params: [BASE_SEPOLIA]
+        params: [ZEROG_GALILEO]
       });
       await window.ethereum.request({
         method: "wallet_switchEthereumChain",
-        params: [{ chainId: BASE_SEPOLIA.chainId }]
+        params: [{ chainId: ZEROG_GALILEO.chainId }]
       });
     }
   }
@@ -93,7 +93,7 @@ export function ConnectWallet() {
         setStatus("No injected wallet found");
         return;
       }
-      await ensureBaseSepolia();
+      await ensureZeroGGalileo();
       const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
       const wallet = accounts[0];
       const challengeRes = await fetch(`${API_BASE}/auth/challenge`, {
@@ -120,7 +120,7 @@ export function ConnectWallet() {
       const token = await verifyRes.json();
       writeAuthSession(token.access_token, wallet);
       setWalletAddress(wallet);
-      setStatus(`Connected on Base Sepolia: ${wallet.slice(0, 6)}...${wallet.slice(-4)}`);
+      setStatus(`Connected on 0G Galileo: ${wallet.slice(0, 6)}...${wallet.slice(-4)}`);
     } catch (error) {
       const message = getWalletErrorMessage(error);
       setStatus(message);

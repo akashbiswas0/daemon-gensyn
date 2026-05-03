@@ -113,7 +113,7 @@ def test_reporter_marks_verifier_mismatch() -> None:
         inputs={"url": "https://example.com"},
         role=ReservationRole.PRIMARY,
         verification_policy=VerificationPolicy(verifier_count=1),
-        payment=PaymentTerms(currency="USDC", payment_terms="demo"),
+        payment=PaymentTerms(currency="0G", payment_terms="demo"),
     )
     primary_result = TaskResult(
         job_id="job-1",
@@ -135,7 +135,7 @@ def test_reporter_marks_verifier_mismatch() -> None:
         worker_peer_id="worker-a",
         role=ReservationRole.PRIMARY,
         result=primary_result,
-        payment=PaymentTerms(currency="USDC", payment_terms="demo"),
+        payment=PaymentTerms(currency="0G", payment_terms="demo"),
     )
     verifier_result = TaskResult(
         job_id="job-1",

@@ -48,6 +48,7 @@ class PlatformSettings(BaseSettings):
     settlement_currency: str = "0G"
     settlement_rpc_url: str = "https://evmrpc-testnet.0g.ai"
     settlement_chain_id: int = 16602
+    settlement_fixed_amount_og: float = 0.002
     settlement_reconcile_interval_seconds: int = 30
     settlement_payment_private_key: str = ""
     settlement_payment_private_key_path: str = ""
