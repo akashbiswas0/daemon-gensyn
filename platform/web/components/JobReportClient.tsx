@@ -4,9 +4,17 @@ import { useEffect, useState } from "react";
 
 import { clientApiBase } from "../lib/clientApiBase";
 const isBaseSepolia = (network: string) => network === "base-sepolia" || network === "sepolia";
-const explorerTxUrl = (network: string, txHash: string) =>
-  isBaseSepolia(network) ? `https://sepolia.basescan.org/tx/${txHash}` : "#";
-const networkLabel = (network: string) => (isBaseSepolia(network) ? "Base Sepolia" : network);
+const isZeroGGalileo = (network: string) => network === "0g-galileo" || network === "0g";
+const explorerTxUrl = (network: string, txHash: string) => {
+  if (isZeroGGalileo(network)) return `https://chainscan-galileo.0g.ai/tx/${txHash}`;
+  if (isBaseSepolia(network)) return `https://sepolia.basescan.org/tx/${txHash}`;
+  return "#";
+};
+const networkLabel = (network: string) => {
+  if (isZeroGGalileo(network)) return "0G Galileo";
+  if (isBaseSepolia(network)) return "Base Sepolia";
+  return network;
+};
 
 type Report = {
   job_id: string;

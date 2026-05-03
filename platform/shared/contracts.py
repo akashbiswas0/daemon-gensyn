@@ -183,7 +183,6 @@ class CDNCheckInput(BaseModel):
 class BrowserTaskInput(BaseModel):
     url: HttpUrl
     task: str = Field(min_length=5, max_length=4000)
-    x402_sig: str = "demo-signature"
 
 
 TaskInput = HttpCheckInput | DNSCheckInput | LatencyProbeInput | PingCheckInput | APICallInput | CDNCheckInput | BrowserTaskInput

@@ -39,7 +39,6 @@ export function CreateJobForm({ regionOptions = [] }: { regionOptions?: RegionOp
             inputs: {
               url: target,
               task: browserTask,
-              x402_sig: "demo-signature",
             },
             regions: [selectedRegion],
             verifier_count: 0,

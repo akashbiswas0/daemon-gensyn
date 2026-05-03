@@ -606,7 +606,7 @@ def test_request_job_dispatches_directly_to_selected_region(tmp_path) -> None:
         runtime.request_job(
             type("Payload", (), {
                 "task_type": CapabilityName.BROWSER_TASK,
-                "inputs": {"url": "https://example.com", "task": "Read the title", "x402_sig": "demo-signature"},
+                "inputs": {"url": "https://example.com", "task": "Read the title"},
                 "regions": ["tokyo"],
                 "verifier_count": 0,
             })()

@@ -31,7 +31,6 @@ class BrowserTaskPlugin(TaskPlugin):
         request_body = {
             "url": str(payload.url),
             "task": payload.task,
-            "x402_sig": payload.x402_sig,
         }
 
         try:

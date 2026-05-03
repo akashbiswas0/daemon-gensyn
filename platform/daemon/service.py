@@ -5,10 +5,12 @@ import json
 import logging
 from decimal import Decimal, InvalidOperation
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import httpx
+from eth_account import Account
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -48,11 +50,8 @@ from shared.contracts import (
 from shared.tasks import get_task_registry
 
 logger = logging.getLogger(__name__)
-TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-RPC_URLS = {
-    "base-sepolia": "https://sepolia.base.org",
-    "sepolia": "https://ethereum-sepolia-rpc.publicnode.com",
-}
+NATIVE_TOKEN_DECIMALS = 18
+NATIVE_TRANSFER_GAS = 21000
 
 
 class JSONRPCRequest(BaseModel):
@@ -115,8 +114,6 @@ class DaemonRuntime:
             model_client=self.model_client,
             agentic_enabled=self.settings.agentic_enabled,
         )
-        self._token_decimals_cache: dict[tuple[str, str], int] = {}
-        self._block_timestamp_cache: dict[tuple[str, int], datetime] = {}
         self._pending_demo_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._seen_discover_requests: set[str] = set()
 
@@ -526,14 +523,15 @@ class DaemonRuntime:
             self.store.append(self.sign_event("attestation", attestation.model_dump(mode="json")))
 
     def payment_mode(self) -> str:
+        currency = self.settings.settlement_currency or "0G"
         if self.settings.daemon_enable_worker and self.settings.worker_payout_wallet:
-            return "requester-settled usdc"
+            return f"requester-settled {currency.lower()}"
         return "payment-disabled demo mode"
 
     def quote_payment_terms(self, price: float | None) -> PaymentTerms:
         return PaymentTerms(
             quoted_price=price,
-            currency="USDC",
+            currency=self.settings.settlement_currency or "0G",
             payment_terms=self.payment_mode(),
         )
 
@@ -588,7 +586,7 @@ class DaemonRuntime:
             role=receipt.role,
             capability_name=receipt.result.task_type,
             amount=float(amount),
-            currency=receipt.payment.currency or "USDC",
+            currency=receipt.payment.currency or self.settings.settlement_currency or "0G",
             token_address=self.settings.settlement_token_address,
             network=self.settings.settlement_network,
             status=SettlementStatus.PENDING,
@@ -616,7 +614,7 @@ class DaemonRuntime:
             role=verification_request.execution_request.role,
             capability_name=receipt.result.task_type,
             amount=float(amount),
-            currency=verification_request.execution_request.payment.currency or "USDC",
+            currency=verification_request.execution_request.payment.currency or self.settings.settlement_currency or "0G",
             token_address=self.settings.settlement_token_address,
             network=self.settings.settlement_network,
             status=SettlementStatus.PENDING,
@@ -633,10 +631,6 @@ class DaemonRuntime:
         self.store_settlement(settlement)
         return settlement
 
-    @staticmethod
-    def _address_topic(address: str) -> str:
-        return "0x" + ("0" * 24) + address.lower().removeprefix("0x")
-
     async def _rpc_call(self, rpc_url: str, method: str, params: list[Any]) -> Any:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -649,140 +643,105 @@ class DaemonRuntime:
             raise RuntimeError(str(payload["error"]))
         return payload.get("result")
 
-    async def _token_decimals(self, rpc_url: str, token_address: str) -> int:
-        cache_key = (rpc_url, token_address.lower())
-        if cache_key in self._token_decimals_cache:
-            return self._token_decimals_cache[cache_key]
-        result = await self._rpc_call(
-            rpc_url,
-            "eth_call",
-            [{"to": token_address, "data": "0x313ce567"}, "latest"],
-        )
-        decimals = int(result, 16)
-        self._token_decimals_cache[cache_key] = decimals
-        return decimals
+    def _payment_signer_key(self) -> str | None:
+        key = (self.settings.settlement_payment_private_key or "").strip()
+        if key:
+            return key
+        path = (self.settings.settlement_payment_private_key_path or "").strip()
+        if path:
+            try:
+                return Path(path).read_text(encoding="utf-8").strip() or None
+            except OSError:
+                return None
+        if self.identity is not None:
+            return self.identity.private_key_hex
+        return None
 
-    async def _block_timestamp(self, rpc_url: str, block_number: int) -> datetime:
-        cache_key = (rpc_url, block_number)
-        if cache_key in self._block_timestamp_cache:
-            return self._block_timestamp_cache[cache_key]
-        result = await self._rpc_call(rpc_url, "eth_getBlockByNumber", [hex(block_number), False])
-        timestamp = datetime.fromtimestamp(int(result["timestamp"], 16), UTC)
-        self._block_timestamp_cache[cache_key] = timestamp
-        return timestamp
-
-    async def _candidate_token_transfers(self, settlement: SettlementRecord) -> list[dict[str, Any]]:
-        rpc_url = RPC_URLS.get(settlement.network)
+    async def _broadcast_native_payment(
+        self, settlement: SettlementRecord
+    ) -> tuple[str | None, str | None]:
+        rpc_url = (self.settings.settlement_rpc_url or "").strip()
         if not rpc_url:
-            return []
-        token_address = settlement.token_address.lower()
-        if not (token_address.startswith("0x") and len(token_address) == 42):
-            logger.warning("skipping chain reconciliation for invalid token address: %s", settlement.token_address)
-            return []
-        worker_wallet = settlement.worker_wallet.lower()
-        if not (worker_wallet.startswith("0x") and len(worker_wallet) == 42):
-            logger.warning("skipping chain reconciliation for invalid worker wallet: %s", settlement.worker_wallet)
-            return []
-        decimals = await self._token_decimals(rpc_url, settlement.token_address)
+            return None, "no settlement_rpc_url configured"
+        if settlement.network != self.settings.settlement_network:
+            return None, f"settlement network {settlement.network} not supported"
+        worker_wallet = settlement.worker_wallet
+        if not (worker_wallet.lower().startswith("0x") and len(worker_wallet) == 42):
+            return None, f"invalid worker wallet: {worker_wallet}"
         try:
-            amount_units = int((Decimal(str(settlement.amount)) * (Decimal(10) ** decimals)).to_integral_value())
-        except (InvalidOperation, ValueError):
-            return []
-        latest_hex = await self._rpc_call(rpc_url, "eth_blockNumber", [])
-        latest_block = int(latest_hex, 16)
-        from_block = max(latest_block - 8000, 0)
-        logs: list[dict[str, Any]] = []
-        step = 1000
-        for chunk_start in range(from_block, latest_block + 1, step):
-            chunk_end = min(chunk_start + step - 1, latest_block)
-            logs.extend(
-                await self._rpc_call(
-                    rpc_url,
-                    "eth_getLogs",
-                    [
-                        {
-                            "fromBlock": hex(chunk_start),
-                            "toBlock": hex(chunk_end),
-                            "address": token_address,
-                            "topics": [TRANSFER_TOPIC, None, self._address_topic(worker_wallet)],
-                        }
-                    ],
-                )
-                or []
+            amount_wei = int(
+                (Decimal(str(settlement.amount)) * (Decimal(10) ** NATIVE_TOKEN_DECIMALS)).to_integral_value()
             )
-        candidates: list[dict[str, Any]] = []
-        for log in logs or []:
-            if int(log.get("data", "0x0"), 16) != amount_units:
-                continue
-            block_number = int(log["blockNumber"], 16)
-            candidates.append(
-                {
-                    "tx_hash": log["transactionHash"],
-                    "block_number": block_number,
-                    "log_index": int(log.get("logIndex", "0x0"), 16),
-                    "timestamp": await self._block_timestamp(rpc_url, block_number),
-                }
+        except (InvalidOperation, ValueError) as exc:
+            return None, f"invalid amount: {exc}"
+        if amount_wei <= 0:
+            return None, "amount is zero"
+        signer_key = self._payment_signer_key()
+        if not signer_key:
+            return None, "no payment private key configured"
+        try:
+            account = Account.from_key(signer_key)
+        except Exception as exc:
+            return None, f"invalid payment key: {exc}"
+        try:
+            nonce_hex = await self._rpc_call(
+                rpc_url, "eth_getTransactionCount", [account.address, "pending"]
             )
-        candidates.sort(key=lambda item: (item["timestamp"], item["block_number"], item["log_index"]))
-        return candidates
+            gas_price_hex = await self._rpc_call(rpc_url, "eth_gasPrice", [])
+        except Exception as exc:
+            return None, f"rpc preflight failed: {exc}"
+        try:
+            tx = {
+                "to": worker_wallet,
+                "value": amount_wei,
+                "gas": NATIVE_TRANSFER_GAS,
+                "gasPrice": int(gas_price_hex, 16),
+                "nonce": int(nonce_hex, 16),
+                "chainId": int(self.settings.settlement_chain_id),
+            }
+            signed = account.sign_transaction(tx)
+        except Exception as exc:
+            return None, f"sign failed: {exc}"
+        raw_bytes = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
+        if raw_bytes is None:
+            return None, "signed tx missing raw payload"
+        raw_hex = "0x" + bytes(raw_bytes).hex()
+        try:
+            tx_hash = await self._rpc_call(rpc_url, "eth_sendRawTransaction", [raw_hex])
+        except Exception as exc:
+            return None, f"send failed: {exc}"
+        if not isinstance(tx_hash, str):
+            return None, "rpc did not return a tx hash"
+        logger.info(
+            "settlement broadcast tx=%s amount=%s %s to=%s",
+            tx_hash,
+            settlement.amount,
+            settlement.currency,
+            worker_wallet,
+        )
+        return tx_hash, None
 
-    @staticmethod
-    def _match_settlements_to_transfers(
-        settlements: list[SettlementRecord],
-        candidates: list[dict[str, Any]],
-        used_hashes: set[str],
-    ) -> list[tuple[SettlementRecord, dict[str, Any]]]:
-        matches: list[tuple[SettlementRecord, dict[str, Any]]] = []
-        remaining = [candidate for candidate in candidates if candidate["tx_hash"] not in used_hashes]
-        for settlement in sorted(settlements, key=lambda item: item.created_at):
-            chosen_index = None
-            for index, candidate in enumerate(remaining):
-                if candidate["timestamp"] >= settlement.created_at - timedelta(minutes=2):
-                    chosen_index = index
-                    break
-            if chosen_index is None and remaining:
-                chosen_index = 0
-            if chosen_index is None:
-                continue
-            chosen = remaining.pop(chosen_index)
-            matches.append((settlement, chosen))
-            used_hashes.add(chosen["tx_hash"])
-        return matches
-
-    async def reconcile_settlements_from_chain(self) -> None:
-        groups: dict[tuple[str, str, str, str], list[SettlementRecord]] = {}
-        used_hashes = {
-            item["tx_hash"]
-            for item in self.store.settlements()
-            if item.get("tx_hash")
-        }
-        for raw in self.store.settlements():
-            settlement = SettlementRecord.model_validate(raw)
-            if settlement.tx_hash or settlement.status == SettlementStatus.CONFIRMED:
-                continue
-            if settlement.status not in {SettlementStatus.TRIGGERED, SettlementStatus.PENDING, SettlementStatus.FAILED}:
-                continue
-            key = (
-                settlement.network,
-                settlement.token_address.lower(),
-                settlement.worker_wallet.lower(),
-                f"{settlement.amount:.18f}",
-            )
-            groups.setdefault(key, []).append(settlement)
-
-        for settlements in groups.values():
-            candidates = await self._candidate_token_transfers(settlements[0])
-            for settlement, candidate in self._match_settlements_to_transfers(settlements, candidates, used_hashes):
-                self.store_settlement(
-                    settlement.model_copy(
-                        update={
-                            "status": SettlementStatus.CONFIRMED,
-                            "tx_hash": candidate["tx_hash"],
-                            "failure_reason": None,
-                            "updated_at": datetime.now(UTC),
-                        }
-                    )
-                )
+    async def _check_tx_receipt(self, tx_hash: str) -> tuple[str | None, str | None]:
+        """Returns (status, error). status is 'success', 'failed', or None when still pending."""
+        rpc_url = (self.settings.settlement_rpc_url or "").strip()
+        if not rpc_url:
+            return None, None
+        try:
+            receipt = await self._rpc_call(rpc_url, "eth_getTransactionReceipt", [tx_hash])
+        except Exception as exc:
+            return None, f"receipt poll failed: {exc}"
+        if receipt is None:
+            return None, None
+        status_hex = receipt.get("status")
+        if status_hex is None:
+            return None, None
+        try:
+            status_int = int(status_hex, 16)
+        except (TypeError, ValueError):
+            return None, None
+        if status_int == 1:
+            return "success", None
+        return "failed", "transaction reverted"
 
     async def reconcile_pending_settlements(self) -> None:
         verification_requests: dict[str, VerificationRequest] = {}
@@ -808,25 +767,54 @@ class DaemonRuntime:
 
         for raw in self.store.settlements():
             settlement = SettlementRecord.model_validate(raw)
-            if settlement.status == SettlementStatus.CONFIRMED:
+            if settlement.status in {SettlementStatus.CONFIRMED, SettlementStatus.FAILED}:
                 continue
-            if (
-                settlement.network != self.settings.settlement_network
-                and settlement.network in {"sepolia", "base-sepolia"}
-            ) or (
-                settlement.network == self.settings.settlement_network
-                and settlement.token_address != self.settings.settlement_token_address
-                and settlement.network in {"sepolia", "base-sepolia"}
-            ):
-                settlement = settlement.model_copy(
-                    update={
-                        "network": self.settings.settlement_network,
-                        "token_address": self.settings.settlement_token_address,
-                        "updated_at": datetime.now(UTC),
-                    }
-                )
-                self.store_settlement(settlement)
-        await self.reconcile_settlements_from_chain()
+            if settlement.status == SettlementStatus.PENDING:
+                tx_hash, err = await self._broadcast_native_payment(settlement)
+                if tx_hash:
+                    self.store_settlement(
+                        settlement.model_copy(
+                            update={
+                                "status": SettlementStatus.TRIGGERED,
+                                "tx_hash": tx_hash,
+                                "failure_reason": None,
+                                "updated_at": datetime.now(UTC),
+                            }
+                        )
+                    )
+                else:
+                    self.store_settlement(
+                        settlement.model_copy(
+                            update={
+                                "status": SettlementStatus.FAILED,
+                                "failure_reason": err or "broadcast failed",
+                                "updated_at": datetime.now(UTC),
+                            }
+                        )
+                    )
+                continue
+            if settlement.status == SettlementStatus.TRIGGERED and settlement.tx_hash:
+                outcome, err = await self._check_tx_receipt(settlement.tx_hash)
+                if outcome == "success":
+                    self.store_settlement(
+                        settlement.model_copy(
+                            update={
+                                "status": SettlementStatus.CONFIRMED,
+                                "failure_reason": None,
+                                "updated_at": datetime.now(UTC),
+                            }
+                        )
+                    )
+                elif outcome == "failed":
+                    self.store_settlement(
+                        settlement.model_copy(
+                            update={
+                                "status": SettlementStatus.FAILED,
+                                "failure_reason": err or "transaction reverted",
+                                "updated_at": datetime.now(UTC),
+                            }
+                        )
+                    )
 
     async def live_nodes(self) -> list[dict[str, Any]]:
         # A live node = signed advertisement with active=true and TTL not expired.

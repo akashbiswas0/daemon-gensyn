@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
 import express from "express";
-import { verifyMessage } from "ethers";
 
 import { applyArtifactRetention } from "./artifacts.js";
 import { logEvent, logStep, truncate } from "./logging.js";
@@ -17,35 +16,6 @@ import {
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
-
-function verifyX402PaymentStub({ url, task, x402_sig }) {
-  if (!x402_sig || typeof x402_sig !== "string") {
-    return {
-      ok: false,
-      reason: "Missing x402_sig"
-    };
-  }
-
-  // TODO: Replace this KeeperHub stub with the real x402 payment envelope
-  // validation flow. For now, we optionally recover a signer from a demo
-  // message so judges can see where ethers v6 verification plugs in.
-  try {
-    const demoMessage = `Pookie Node task approval\nURL: ${url}\nTask: ${task}`;
-    const recoveredAddress = verifyMessage(demoMessage, x402_sig);
-
-    return {
-      ok: true,
-      mode: "mock-verified-signature",
-      recoveredAddress
-    };
-  } catch {
-    return {
-      ok: true,
-      mode: "mock-accepted-placeholder",
-      recoveredAddress: null
-    };
-  }
-}
 
 export function createApp() {
   const app = express();
@@ -95,12 +65,11 @@ export function createApp() {
 
   app.post("/mcp/execute", async (request, response) => {
     const requestId = request.requestId;
-    const { url, task, x402_sig } = request.body ?? {};
+    const { url, task } = request.body ?? {};
 
     logStep(requestId, "parse-request", "start", {
       hasUrl: typeof url === "string",
       hasTask: typeof task === "string",
-      hasX402Sig: typeof x402_sig === "string",
       taskLength: typeof task === "string" ? task.length : 0
     });
 
@@ -110,7 +79,7 @@ export function createApp() {
       });
       response.status(400).json({
         ok: false,
-        error: "Expected JSON body with string fields: url, task, x402_sig"
+        error: "Expected JSON body with string fields: url, task"
       });
       return;
     }
@@ -118,26 +87,6 @@ export function createApp() {
     logStep(requestId, "parse-request", "success", {
       url,
       taskLength: task.length
-    });
-
-    logStep(requestId, "x402-verify", "start", {
-      mode: "keeperhub-stub"
-    });
-    const payment = verifyX402PaymentStub({ url, task, x402_sig });
-    if (!payment.ok) {
-      logStep(requestId, "x402-verify", "fail", {
-        reason: payment.reason
-      });
-      response.status(402).json({
-        ok: false,
-        error: payment.reason
-      });
-      return;
-    }
-
-    logStep(requestId, "x402-verify", "success", {
-      mode: payment.mode,
-      recoveredAddress: payment.recoveredAddress
     });
 
     const storageValidation = validateZeroGStorageConfig();
@@ -185,8 +134,7 @@ export function createApp() {
         txHash: upload.txHash,
         reportPath: agentResult.reportPath,
         artifactDir: agentResult.artifactDir,
-        screenshots: agentResult.screenshots,
-        payment
+        screenshots: agentResult.screenshots
       });
     } catch (error) {
       logStep(requestId, "response", "fail", {
