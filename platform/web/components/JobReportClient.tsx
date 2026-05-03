@@ -265,16 +265,27 @@ export function JobReportClient({ jobId }: { jobId: string }) {
               {request?.task ? <p>{request.task}</p> : null}
               {result.success ? (
                 <>
-                  {response?.reportUri ? (
+                  {response?.reportHash ? (
                     <div>
-                      Report:&nbsp;
-                      <a href={response.reportUri} target="_blank" rel="noreferrer">
-                        {response.reportUri}
+                      Report PDF:&nbsp;
+                      <a
+                        href={`https://indexer-storage-testnet-turbo.0g.ai/file?root=${response.reportHash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Download from 0G Storage
                       </a>
                     </div>
                   ) : null}
+                  {response?.reportUri ? (
+                    <div className="muted" style={{ wordBreak: "break-all" }}>
+                      URI: <code>{response.reportUri}</code>
+                    </div>
+                  ) : null}
                   {response?.reportHash ? (
-                    <div className="muted">Report hash: {response.reportHash}</div>
+                    <div className="muted" style={{ wordBreak: "break-all" }}>
+                      Report hash: <code>{response.reportHash}</code>
+                    </div>
                   ) : null}
                   {response?.txHash ? (
                     <div className="muted">0G Storage tx: {response.txHash}</div>
